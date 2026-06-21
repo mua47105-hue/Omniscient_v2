@@ -1,9 +1,3 @@
-node_modules
-.next
-dev.log
-server.log
-db/*.db
-db/*.db-journal
 node_modules/
 .next/
 dev.log
@@ -15,3 +9,7 @@ db/
 skills/
 download/
 upload/
+tool-results/
+tsconfig.tsbuildinfo
+bun.lock
+.next/
