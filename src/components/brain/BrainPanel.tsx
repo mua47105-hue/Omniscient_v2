@@ -23,6 +23,7 @@ import { FreeSignalsCard } from '@/components/brain/FreeSignalsCard';
 import { Sparkline } from '@/components/brain/Sparkline';
 import { ThinkingIndicator } from '@/components/brain/ThinkingIndicator';
 import { TriggerBreakdown } from '@/components/brain/TriggerBreakdown';
+import { SavedAreaChart } from '@/components/brain/SavedAreaChart';
 
 // ---- Types mirroring src/lib/brain/state.ts ----
 interface AssetWatch {
@@ -332,6 +333,26 @@ export function BrainPanel() {
           <p className="text-[11px] text-muted-foreground/70">
             When the budget is exhausted the brain downshifts to deterministic-only mode (no LLM) until the window resets — the free-tier safety net. The gap between the two lines is real tokens not spent.
           </p>
+        </CardContent>
+      </Card>
+
+      {/* Cumulative tokens-saved area chart — the ponytail benefit made tangible.
+          Distinct from the used-vs-saved sparkline: this shows savings GROWING
+          over time as the brain's lazy-gate skips/cache accumulate. */}
+      <Card className="border-border/60 ring-1 ring-inset ring-border/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <TrendingDown className="h-4 w-4 text-emerald-400" /> Cumulative Tokens Saved
+            <span className="text-[10px] font-normal text-muted-foreground ml-1">ponytail benefit over time</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4 flex-wrap">
+          <SavedAreaChart samples={snap?.samples ?? []} width={300} height={70} className="text-emerald-400 flex-1 min-w-[200px]" />
+          <div className="text-right shrink-0">
+            <div className="text-2xl font-bold text-emerald-400 tabular-nums">{fmt(stats?.tokensSaved ?? 0)}</div>
+            <div className="text-[10px] text-muted-foreground">tokens not spent</div>
+            <div className="text-[10px] text-emerald-400/70 mt-0.5">{savedPct.toFixed(0)}% of gross</div>
+          </div>
         </CardContent>
       </Card>
 

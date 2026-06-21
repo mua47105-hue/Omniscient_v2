@@ -67,5 +67,42 @@ export async function getOnChainStats(): Promise<OnChainStats> {
 
   const out: OnChainStats = { txCount24h, hashRate, difficulty, fetchedAt: Date.now() };
   store('onchain', out);
+  // Accumulate the hashrate sample for trend detection (used by the consensus
+  // fundamental layer). Capped ring buffer — keeps the last 24 samples.
+  if (hashRate > 0) {
+    hashrateHistory.push({ ts: Date.now(), hashRate });
+    if (hashrateHistory.length > 24) hashrateHistory.shift();
+  }
   return out;
+}
+
+// --- Hashrate trend tracker ---
+// Accumulates hashrate samples over time so the consensus fundamental layer
+// can detect "miner confidence rising/falling". Each getOnChainStats() call
+// (15-min cache) appends a sample; after a few samples the trend is meaningful.
+interface HashrateSample { ts: number; hashRate: number }
+const hashrateHistory: HashrateSample[] = [];
+
+export interface OnchainTrend {
+  direction: 'rising' | 'falling' | 'flat';
+  pctChange: number; // % change oldest→newest in the window
+  sampleCount: number;
+  current: number;
+}
+
+/**
+ * Compute the hashrate trend over the accumulated samples. Returns 'flat' until
+ * there are enough samples (≥3) to call a direction. The pctChange is the
+ * oldest-vs-newest delta in the window — a genuine fundamental signal: rising
+ * hashrate = miners committing capital = bullish on the network's future.
+ */
+export function getOnchainTrend(): OnchainTrend {
+  const n = hashrateHistory.length;
+  if (n < 3) return { direction: 'flat', pctChange: 0, sampleCount: n, current: hashrateHistory[n - 1]?.hashRate ?? 0 };
+  const oldest = hashrateHistory[0].hashRate;
+  const newest = hashrateHistory[n - 1].hashRate;
+  const pctChange = oldest > 0 ? ((newest - oldest) / oldest) * 100 : 0;
+  // >3% change over the window = a real move; below that = flat (noise).
+  const direction: OnchainTrend['direction'] = pctChange > 3 ? 'rising' : pctChange < -3 ? 'falling' : 'flat';
+  return { direction, pctChange: Math.round(pctChange * 10) / 10, sampleCount: n, current: newest };
 }

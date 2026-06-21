@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
 interface TriggerBreakdownProps {
@@ -13,23 +14,25 @@ interface TriggerBreakdownProps {
 /**
  * Compact donut chart for the trigger-source breakdown (news / cross-asset /
  * manual). Inline SVG — no chart lib (ponytail: the platform has <svg>). Each
- * segment is an arc colored by source. Center shows the total. Empty state
- * shows a muted ring + "no triggers yet".
+ * segment is an arc colored by source. Center shows the total. Hovering a
+ * segment OR legend row highlights it (dims the others + shows the count in
+ * the center). Empty state shows a muted ring.
  */
 export function TriggerBreakdown({ news, crossAsset, manual, size = 120, className }: TriggerBreakdownProps) {
+  const [hovered, setHovered] = useState<string | null>(null);
   const total = news + crossAsset + manual;
-  const r = (size - 16) / 2; // radius with 8px padding
+  const r = (size - 16) / 2;
   const cx = size / 2;
   const cy = size / 2;
   const circumference = 2 * Math.PI * r;
 
-  const segments = [
-    { count: news, color: '#f59e0b', label: 'news' },        // amber
-    { count: crossAsset, color: '#a855f7', label: 'cross-asset' }, // violet
-    { count: manual, color: '#38bdf8', label: 'manual' },     // sky
-  ].filter((s) => s.count > 0);
+  const allSegments = [
+    { key: 'news', count: news, color: '#f59e0b', label: 'News' },
+    { key: 'cross-asset', count: crossAsset, color: '#a855f7', label: 'Cross-asset' },
+    { key: 'manual', count: manual, color: '#38bdf8', label: 'Manual' },
+  ];
+  const segments = allSegments.filter((s) => s.count > 0);
 
-  // Build arc segments. Each segment's length = (count/total) * circumference.
   let offset = 0;
   const arcs = segments.map((s) => {
     const fraction = total > 0 ? s.count / total : 0;
@@ -39,47 +42,71 @@ export function TriggerBreakdown({ news, crossAsset, manual, size = 120, classNa
     return arc;
   });
 
+  // Center display: hovered segment's count + label, else total.
+  const centerCount = hovered ? (allSegments.find((s) => s.key === hovered)?.count ?? total) : total;
+  const centerLabel = hovered ? (allSegments.find((s) => s.key === hovered)?.label ?? 'triggers') : 'triggers';
+
   return (
     <div className={cn('flex items-center gap-3', className)}>
       <svg width={size} height={size} className="shrink-0" role="img" aria-label={`Trigger breakdown: ${total} total (${news} news, ${crossAsset} cross-asset, ${manual} manual)`}>
-        {/* Background ring (muted) */}
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="currentColor" strokeOpacity="0.1" strokeWidth="10" />
         {total === 0 ? (
-          // Empty state — dashed muted ring
           <circle cx={cx} cy={cy} r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="10" strokeDasharray="4 6" />
         ) : (
-          arcs.map((a, i) => (
-            <circle
-              key={i}
-              cx={cx} cy={cy} r={r} fill="none" stroke={a.color} strokeWidth="10"
-              strokeDasharray={a.dasharray}
-              strokeDashoffset={-a.offset}
-              transform={`rotate(-90 ${cx} ${cy})`}
-              strokeLinecap="butt"
-            />
-          ))
+          arcs.map((a) => {
+            const isHovered = hovered === a.key;
+            const isDimmed = hovered !== null && !isHovered;
+            return (
+              <circle
+                key={a.key}
+                cx={cx} cy={cy} r={r} fill="none" stroke={a.color} strokeWidth={isHovered ? 12 : 10}
+                strokeDasharray={a.dasharray}
+                strokeDashoffset={-a.offset}
+                transform={`rotate(-90 ${cx} ${cy})`}
+                strokeLinecap="butt"
+                opacity={isDimmed ? 0.35 : 1}
+                style={{ cursor: 'pointer', transition: 'stroke-width 0.15s, opacity 0.15s' }}
+                onMouseEnter={() => setHovered(a.key)}
+                onMouseLeave={() => setHovered(null)}
+              />
+            );
+          })
         )}
-        {/* Center total */}
         <text x={cx} y={cy - 2} textAnchor="middle" className="fill-foreground" fontSize="18" fontWeight="700">
-          {total}
+          {centerCount}
         </text>
-        <text x={cx} y={cy + 14} textAnchor="middle" className="fill-muted-foreground" fontSize="9">
-          triggers
+        <text x={cx} y={cy + 14} textAnchor="middle" className="fill-muted-foreground" fontSize="8">
+          {centerLabel}
         </text>
       </svg>
       {/* Legend */}
       <div className="space-y-1 text-[11px]">
-        <LegendRow color="#f59e0b" label="News" count={news} />
-        <LegendRow color="#a855f7" label="Cross-asset" count={crossAsset} />
-        <LegendRow color="#38bdf8" label="Manual" count={manual} />
+        {allSegments.map((s) => (
+          <LegendRow
+            key={s.key}
+            color={s.color}
+            label={s.label}
+            count={s.count}
+            isHovered={hovered === s.key}
+            isDimmed={hovered !== null && hovered !== s.key}
+            onHover={(h) => setHovered(h ? s.key : null)}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-function LegendRow({ color, label, count }: { color: string; label: string; count: number }) {
+function LegendRow({ color, label, count, isHovered, isDimmed, onHover }: {
+  color: string; label: string; count: number; isHovered: boolean; isDimmed: boolean; onHover: (h: boolean) => void;
+}) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div
+      className={cn('flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors cursor-default', isHovered && 'bg-muted/40')}
+      style={{ opacity: isDimmed ? 0.5 : 1 }}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+    >
       <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
       <span className="text-muted-foreground flex-1">{label}</span>
       <span className="font-mono tabular-nums font-semibold">{count}</span>

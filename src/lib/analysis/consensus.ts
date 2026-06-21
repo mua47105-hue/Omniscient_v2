@@ -11,6 +11,7 @@ export interface ConsensusInput {
   fundingRate?: number;
   sentimentScore?: number; // -100..100 from news
   llmAnalysis?: { score: number; rationale: string; model: string };
+  onchainTrend?: { direction: 'rising' | 'falling' | 'flat'; pctChange: number; sampleCount: number };
 }
 
 const LAYER_WEIGHTS: Record<string, number> = {
@@ -50,6 +51,31 @@ export function buildSentimentLayer(newsScore: number, fundingRate?: number): La
   return { layer: 'sentiment', score, confidence: 65, detail };
 }
 
+/**
+ * On-chain fundamental layer — BTC hashrate trend as a miner-confidence signal.
+ * Rising hashrate = miners committing capital = bullish on the network's future.
+ * Falling = miners capitulating = bearish. Only applies to BTC (the hashrate
+ * is BTC-specific); other assets get no on-chain layer. Confidence scales with
+ * the magnitude of the trend + the sample count (more samples = more confident).
+ */
+export function buildOnchainLayer(trend: { direction: 'rising' | 'falling' | 'flat'; pctChange: number; sampleCount: number }, asset: string): LayerScore | null {
+  // Only BTC has a meaningful hashrate trend in our data source.
+  if (!asset.toUpperCase().includes('BTC')) return null;
+  // Need at least 3 samples to call a direction; below that, no opinion.
+  if (trend.sampleCount < 3) return null;
+
+  // Map the % change to a -100..100 score. Cap the input at ±20% so a wild
+  // outlier doesn't dominate. Rising = +, falling = −.
+  const clamped = Math.max(-20, Math.min(20, trend.pctChange));
+  const score = Math.round((clamped / 20) * 60); // ±60 max — a fundamental nudge, not a driver
+  // Confidence grows with sample count (max ~70 at 12+ samples) + magnitude.
+  const magnitudeConf = Math.min(40, Math.abs(clamped) * 2);
+  const sampleConf = Math.min(30, trend.sampleCount * 3);
+  const confidence = Math.min(70, magnitudeConf + sampleConf);
+  const detail = `BTC hashrate ${trend.direction} ${trend.pctChange > 0 ? '+' : ''}${trend.pctChange}% (${trend.sampleCount} samples)`;
+  return { layer: 'onchain', score, confidence, detail };
+}
+
 export function computeConsensus(input: ConsensusInput, llmLayer?: LayerScore): ConsensusResult {
   const layers: LayerScore[] = [];
 
@@ -62,6 +88,12 @@ export function computeConsensus(input: ConsensusInput, llmLayer?: LayerScore): 
   }
   if (input.sentimentScore !== undefined) {
     layers.push(buildSentimentLayer(input.sentimentScore, input.fundingRate));
+  }
+  // On-chain fundamental layer — BTC hashrate trend (miner confidence).
+  // Only contributes for BTC + when there are enough hashrate samples.
+  if (input.onchainTrend) {
+    const ocLayer = buildOnchainLayer(input.onchainTrend, input.asset);
+    if (ocLayer) layers.push(ocLayer);
   }
   if (llmLayer) {
     layers.push(llmLayer);

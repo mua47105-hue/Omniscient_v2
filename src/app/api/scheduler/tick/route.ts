@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getKlines, getTicker24h, getOrderBook, getFundingRate } from '@/lib/market/binance';
+import { getOnchainTrend } from '@/lib/market/onchain';
 import { computeIndicators } from '@/lib/market/indicators';
 import { computeConsensus, shouldAlert } from '@/lib/analysis/consensus';
 import { gradeExpiredSignals } from '@/lib/analysis/grading';
@@ -109,8 +110,10 @@ async function analyzeAsset(
   const indicators = computeIndicators(klines);
 
   // 1) FREE deterministic consensus — always computed, the gate's baseline.
+  // On-chain hashrate trend (BTC miner confidence) is a free fundamental layer.
+  const onchainTrend = getOnchainTrend();
   const deterministic = computeConsensus(
-    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate },
+    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, onchainTrend },
     undefined,
   );
 
@@ -220,7 +223,7 @@ async function analyzeAsset(
 
   // 2) Final consensus — with whatever LLM input we have (or none).
   const consensus = computeConsensus(
-    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, llmAnalysis },
+    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, llmAnalysis, onchainTrend },
     llmLayer,
   );
 

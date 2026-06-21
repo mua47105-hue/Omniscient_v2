@@ -374,3 +374,29 @@ Task: QA + fix tokensSaved double-count bug + trigger-breakdown donut + thinking
 - Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously + populate the Self-Tune History card.
 - News triggers run every 60s — will fire + count + populate the donut the moment breaking news lands.
 - Next cron could: (a) wire on-chain hashrate-trend as a consensus fundamental layer, (b) make the self-tune history a step-chart of threshold values, (c) add hover interactivity to the donut (VLM nit), (d) add a GitHub token setting to raise dev-activity rate limit, (e) add a "tokensSaved over time" area chart (distinct from the used-vs-saved sparkline).
+
+---
+Task ID: 12
+Agent: main (15-min cron review #10)
+Task: QA + on-chain hashrate-trend consensus layer + cumulative-saved area chart + donut hover interactivity.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 170/174 ticks ok — lastErr: none). Brain running, auto mode, 98 ticks, 2 LLM calls, 58 skips, 11 assets watched, 98 timeline samples. Lint clean, no runtime errors. All 9 pages render 200.
+- QA via agent-browser + VLM: dashboard 7/10. totalGraded still 0 (signals need 24h).
+
+## Completed modifications
+1. **On-chain hashrate-trend consensus layer** (`src/lib/market/onchain.ts` trend tracker + `src/lib/analysis/consensus.ts` buildOnchainLayer + tick wiring): the onchain client now accumulates hashrate samples in a ring buffer (capped 24) + exposes `getOnchainTrend()` returning direction/pctChange/sampleCount. New `buildOnchainLayer()` in the consensus engine maps the trend to a ±60 score (rising hashrate = miners committing capital = bullish; falling = bearish), only for BTC + when ≥3 samples exist. Confidence scales with magnitude + sample count. Wired into both `computeConsensus` calls in the tick (deterministic + final). This adds a genuine free fundamental layer to the 7-layer consensus — the deepest autonomy improvement (worklog rec a).
+2. **Cumulative tokens-saved area chart** (`src/components/brain/SavedAreaChart.tsx` + BrainPanel card): dedicated emerald area chart showing cumulative savings GROWING over time (distinct from the used-vs-saved sparkline). Inline SVG, no chart lib. New "Cumulative Tokens Saved" card on the brain page with the area chart + a big savings number + "% of gross". VLM: 9/10 ("makes savings tangible, donut + area chart well-balanced, complementary purposes"). Addresses worklog rec (e).
+3. **Donut hover interactivity** (`src/components/brain/TriggerBreakdown.tsx`): made the donut stateful — hovering a segment OR legend row highlights it (thickens the arc, dims the others) + the center shows that segment's count + label instead of the total. Legend rows also highlight on hover. Addresses VLM's earlier nit.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 170/174 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: Trigger Breakdown donut renders (interactive); Cumulative Tokens Saved card renders with area chart + "25% of gross".
+- onchain API: returns live data (hashRate: 857 GH/s). Trend tracker accumulating samples (will produce a direction after 3+ samples).
+- VLM: area chart + donut combination 9/10 ("sleek and functional, complementary purposes").
+- On-chain consensus layer: wired + will contribute to BTC signals once ≥3 hashrate samples accumulate (~45 min at 15-min cache).
+
+## Unresolved / next-phase recommendations
+- On-chain hashrate layer is BTC-only + needs ≥3 samples (~45min) to produce a direction. Will activate autonomously.
+- Self-tuning still data-starved (needs 24h for first grades).
+- Next cron could: (a) make the self-tune history a step-chart of threshold values, (b) add a GitHub token setting to raise dev-activity rate limit, (c) extend the on-chain layer to ETH gas-price trend (free, via etherscan-style API), (d) add a "consensus layers" breakdown on signals showing which layers contributed (now that onchain can contribute), (e) area-chart contrast tweak (VLM's only nit).
