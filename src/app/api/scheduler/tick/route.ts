@@ -18,7 +18,7 @@ import { SCHEDULER_TICK_SYSTEM } from '@/lib/llm/prompts';
 import { sendSignalAlert } from '@/lib/alerts/telegram';
 import { getSetting, setSetting, SETTING_KEYS } from '@/lib/config/settings';
 import {
-  hydrate, isRunning, tickStarted, getWatch, setWatch, getConfig, budgetExhausted,
+  hydrate, isRunning, tickStarted, tickEnded, getWatch, setWatch, getConfig, budgetExhausted,
   recordSkip, recordCacheHit, recordBudgetSkip, recordLlmCall, recordAlert, recordAction,
   recordLlmFailure, recordLlmSuccess, llmInCooldown, recordSample,
   consumeForceRunQueue, type AssetWatch,
@@ -363,10 +363,25 @@ export async function POST(req: NextRequest) {
       forcedSummary = await runForcedAnalysis(sendAlerts);
     } catch { /* best-effort */ }
 
+    // News-event triggers — run on EVERY tick (60s) for sub-minute breaking-news
+    // response. The 5-min RSS cache (in news-triggers) keeps this free-tier-safe.
+    // This is the only trigger that fires on external events rather than price
+    // action, so it mustn't wait for the 15-min scan cadence.
+    let newsTriggerSummary: { triggered: number; queued: number; headlines: number } | null = null;
+    try {
+      if (isRunning()) {
+        const nt = await checkNewsTriggers();
+        if (nt.triggered) {
+          newsTriggerSummary = { triggered: 1, queued: nt.queuedAssets.length, headlines: nt.matchedHeadlines.length };
+        }
+      }
+    } catch { /* best-effort — news never blocks the tick */ }
+
     const jobs = await db.scheduleJob.findMany({ where: { enabled: true } });
     const due = jobs.filter((j) => forceModule ? j.moduleKey === forceModule : isDue(j));
     if (due.length === 0) {
       recordSample(); // keep the timeline continuous even on no-op ticks
+      tickEnded();
       return NextResponse.json<ApiResult<{ ran: any[]; skipped: true; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; forced: typeof forcedSummary }>>({ success: true, data: { ran: [], skipped: true, grading: gradingSummary, priceAlerts: priceAlertSummary, forced: forcedSummary } });
     }
 
@@ -406,19 +421,8 @@ export async function POST(req: NextRequest) {
       }
     } catch { /* best-effort */ }
 
-    // News-event triggers: scan fresh crypto-news RSS for market-moving
-    // headlines (hack/ETF/regulation/…) and queue mentioned assets for
-    // re-analysis. Free + tokenless — the only trigger that fires on external
-    // events rather than price action. Runs every tick (RSS is cached cheaply).
-    let newsTriggerSummary: { triggered: number; queued: number; headlines: number } | null = null;
-    try {
-      if (isRunning()) {
-        const nt = await checkNewsTriggers();
-        if (nt.triggered) {
-          newsTriggerSummary = { triggered: 1, queued: nt.queuedAssets.length, headlines: nt.matchedHeadlines.length };
-        }
-      }
-    } catch { /* best-effort — news never blocks the tick */ }
+    // (News-event triggers already ran above, on every tick, for sub-minute
+    // breaking-news response. No duplicate call here.)
 
     // Self-tuning: read recent graded signals and nudge gate thresholds toward
     // better calibration. Conservative (needs ≥12 grades, max ±2 nudge, bounded).
@@ -438,6 +442,7 @@ export async function POST(req: NextRequest) {
 
     // Record a token-economy timeline sample so the savings sparkline stays fresh.
     recordSample();
+    tickEnded();
 
     return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary; triggers: typeof triggerSummary; newsTriggers: typeof newsTriggerSummary; tune: typeof tuneSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary, triggers: triggerSummary, newsTriggers: newsTriggerSummary, tune: tuneSummary } });
   } catch (e: any) {

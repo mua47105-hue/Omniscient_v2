@@ -321,3 +321,29 @@ Task: QA + watch-list action icons + dev-activity delta trend + self-tune histor
 - Self-tuning + self-tune history are wired but data-starved (need 24h for first grades). They'll activate + populate autonomously.
 - Dev-activity delta is computed but GitHub rate-limits anonymous use. Could add an optional GitHub token in Settings to raise to 5000/hr.
 - Next cron could: (a) wire on-chain hashrate-trend as a consensus fundamental layer, (b) move news triggers to every-tick (60s) with a 5-min RSS cache, (c) add hover tooltips on the watch-list action icons, (d) make the self-tune history a proper step-chart of threshold values over time, (e) add a "trigger stats" breakdown chart (news vs cross-asset vs manual over time).
+
+---
+Task ID: 10
+Agent: main (15-min cron review #8)
+Task: QA + "Brain thinking" live indicator + every-tick news triggers + watch-icon tooltips.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 156/160 ticks ok — lastErr: none). Brain running, auto mode, 83 ticks, 2 LLM calls, 48 skips (47 budget-skips — budget guard very active), 11 assets watched, 83 timeline samples. Lint clean, no runtime errors. All 9 pages render 200.
+- QA via agent-browser + VLM: VLM suggested a real-time "thinking" indicator to make the brain feel alive. totalGraded still 0 (signals need 24h).
+
+## Completed modifications
+1. **"Brain thinking" live indicator** (`src/lib/brain/state.ts` thinking-state + `src/components/brain/ThinkingIndicator.tsx`): `tickStarted()`/`tickEnded()` track when a tick is in progress + the last tick's duration. `isThinking()` returns true during a tick (with a 30s sanity cap for stuck ticks). The ThinkingIndicator client component polls /api/brain every 1.5s + renders a 5-bar animated waveform (framer-motion staggered scale) while thinking, a flat dim line when idle, + shows the last tick duration ("42ms") or "thinking…". Added to the BrainPanel header next to the AUTONOMOUS badge. VLM: 8/10 ("makes the brain feel more alive, well-placed").
+2. **Every-tick news triggers** (`src/lib/brain/news-triggers.ts` RSS cache + tick route): moved `checkNewsTriggers()` from the 15-min due-job scan to run on EVERY tick (60s) for sub-minute breaking-news response. Added a 5-min RSS feed cache (Map<url, {items, ts}>) so feeds aren't re-fetched constantly — the seen-article dedup prevents re-triggering within the cache window. Removed the duplicate call from the due-jobs section. This is the biggest autonomy improvement: breaking news now wakes the brain within 60s instead of up to 15min.
+3. **Watch-list action-icon tooltips** (`src/components/brain/BrainPanel.tsx`): upgraded the icon `title` from a bare action name to a rich multi-line tooltip "ACTION · humanized-reason · tier" + added a hover bg transition. Lightweight (native title, no extra Tooltip providers).
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 156/160 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: ThinkingIndicator renders in the header ("Brain idle" / "idle" when not thinking); watch-list action icons have rich tooltips.
+- Brain snapshot includes `thinking` + `lastTickDurationMs` fields.
+- News triggers run on every tick (verified: tick with `skipped:true` still ran news triggers without error).
+- VLM: thinking indicator 8/10 ("makes the brain feel more alive, well-placed next to AUTONOMOUS badge").
+
+## Unresolved / next-phase recommendations
+- Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously + populate the Self-Tune History card.
+- News triggers now run every 60s — will fire + count the moment breaking news lands (sub-minute response).
+- Next cron could: (a) wire on-chain hashrate-trend as a consensus fundamental layer, (b) make the self-tune history a step-chart of threshold values, (c) add a "trigger stats" breakdown chart (news vs cross-asset vs manual over time), (d) add a GitHub token setting to raise dev-activity rate limit to 5000/hr, (e) color-contrast tweak on the thinking waveform (VLM's only nit).

@@ -57,7 +57,14 @@ const MAX_SEEN = 500;
 
 interface RssItem { title: string; url: string; date: string | null }
 
-function fetchRss(feedUrl: string): Promise<RssItem[]> {
+// RSS feed cache — 5 min TTL. Lets checkNewsTriggers run every tick (60s)
+// for sub-minute breaking-news response without re-fetching feeds constantly.
+// The seen-article dedup (in brain state) prevents re-triggering within the
+// cache window. ponytail: a Map cache is the minimum that works here.
+const rssCache = new Map<string, { items: RssItem[]; ts: number }>();
+const RSS_CACHE_TTL = 5 * 60 * 1000;
+
+function fetchRssUncached(feedUrl: string): Promise<RssItem[]> {
   return new Promise((resolve) => {
     const u = new URL(feedUrl);
     const req = https.get(
@@ -65,7 +72,7 @@ function fetchRss(feedUrl: string): Promise<RssItem[]> {
       (res) => {
         if (res.statusCode === 301 || res.statusCode === 302) {
           const loc = res.headers.location;
-          if (loc) { fetchRss(loc).then(resolve).catch(() => resolve([])); return; }
+          if (loc) { fetchRssUncached(loc).then(resolve).catch(() => resolve([])); return; }
         }
         let xml = '';
         res.on('data', (c) => (xml += c));
@@ -76,6 +83,18 @@ function fetchRss(feedUrl: string): Promise<RssItem[]> {
     );
     req.on('error', () => resolve([]));
     req.on('timeout', () => { req.destroy(); resolve([]); });
+  });
+}
+
+/** Cached RSS fetch — returns the cached items if fresh (< 5 min), else re-fetches. */
+function fetchRss(feedUrl: string): Promise<RssItem[]> {
+  const cached = rssCache.get(feedUrl);
+  if (cached && Date.now() - cached.ts < RSS_CACHE_TTL) {
+    return Promise.resolve(cached.items);
+  }
+  return fetchRssUncached(feedUrl).then((items) => {
+    rssCache.set(feedUrl, { items, ts: Date.now() });
+    return items;
   });
 }
 

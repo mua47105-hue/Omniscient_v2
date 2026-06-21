@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { FreeSignalsCard } from '@/components/brain/FreeSignalsCard';
 import { Sparkline } from '@/components/brain/Sparkline';
+import { ThinkingIndicator } from '@/components/brain/ThinkingIndicator';
 
 // ---- Types mirroring src/lib/brain/state.ts ----
 interface AssetWatch {
@@ -199,6 +200,8 @@ export function BrainPanel() {
             </Badge>
           </motion.div>
           <Badge variant="outline" className="gap-1 capitalize px-2.5 py-1 text-xs">{snap?.mode ?? '—'} mode</Badge>
+          {/* "Brain thinking" live indicator — pulses while a tick is in progress. */}
+          <ThinkingIndicator />
         </div>
       </div>
 
@@ -332,8 +335,10 @@ export function BrainPanel() {
                         is instantly clear (Zap=analyzing, Eye=skipping, etc). */}
                     {(() => {
                       const { Icon, color } = actionIcon(w.lastAction);
+                      // Rich native tooltip — action + humanized reason + tier.
+                      const tip = `${w.lastAction.toUpperCase()} · ${humanizeReason(w.lastReason)} · ${tierLabel(w.lastTier)}`;
                       return (
-                        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/40', color)} title={w.lastAction}>
+                        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/40 transition-colors hover:bg-muted/60', color)} title={tip}>
                           <Icon className="h-4 w-4" />
                         </div>
                       );

@@ -320,10 +320,35 @@ export function allWatch(): AssetWatch[] {
 }
 
 // --- Stats + action log ---
+// Thinking state — tracks whether a tick is in progress + the last tick's
+// duration. Powers the "Brain thinking" live indicator so operators see the
+// brain actively processing, not just static stats.
+let tickStartTs = 0;
+let lastTickDurationMs = 0;
+
 export function tickStarted(): void {
   const s = state();
   s.stats.ticksTotal++;
   s.stats.lastTickAt = Date.now();
+  tickStartTs = Date.now();
+}
+
+/** Mark the tick complete — records how long it took. Call at the end of POST. */
+export function tickEnded(): void {
+  if (tickStartTs > 0) {
+    lastTickDurationMs = Date.now() - tickStartTs;
+    tickStartTs = 0;
+  }
+}
+
+/** True if a tick is currently in progress (the brain is "thinking"). */
+export function isThinking(): boolean {
+  return tickStartTs > 0 && Date.now() - tickStartTs < 30000; // sanity cap: a tick >30s is stuck
+}
+
+/** How long the last completed tick took (ms). 0 if none has finished. */
+export function lastTickDuration(): number {
+  return lastTickDurationMs;
 }
 
 /**
@@ -415,6 +440,8 @@ export function snapshot() {
     config: s.config,
     budget: { cap: s.config.budgetCap, used: s.budgetUsed, remaining: budgetRemaining(), windowMs: s.config.budgetWindowMs, windowStart: s.budgetWindowStart },
     llm: { inCooldown: llmInCooldown(), cooldownUntil: llmCooldownUntilTs(), consecutiveFailures: llmConsecutiveFailures },
+    thinking: isThinking(),
+    lastTickDurationMs: lastTickDuration(),
     stats: s.stats,
     samples: s.statsSamples,
     tuneEvents: s.tuneEvents,
