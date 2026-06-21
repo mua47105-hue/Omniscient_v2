@@ -40,11 +40,12 @@ export function ThinkingIndicator() {
     <div className="flex items-center gap-2">
       {thinking ? (
         // Animated waveform — 5 bars with staggered scale animation.
-        <div className="flex items-end gap-0.5 h-4" aria-label="Brain thinking">
+        // Brighter emerald + drop-shadow glow so it pops against the gradient bg.
+        <div className="flex items-end gap-0.5 h-4" aria-label="Brain thinking" style={{ filter: 'drop-shadow(0 0 3px rgba(16,185,129,0.6))' }}>
           {[0, 1, 2, 3, 4].map((i) => (
             <motion.span
               key={i}
-              className="w-0.5 rounded-full bg-emerald-400"
+              className="w-1 rounded-full bg-emerald-300"
               animate={{ height: ['30%', '100%', '40%', '80%', '30%'] }}
               transition={{
                 duration: 0.9,
@@ -60,7 +61,7 @@ export function ThinkingIndicator() {
         // Idle — show a flat line + last tick duration.
         <div className="flex items-end gap-0.5 h-4 opacity-40" aria-label="Brain idle">
           {[0, 1, 2, 3, 4].map((i) => (
-            <span key={i} className="w-0.5 rounded-full bg-emerald-400" style={{ height: '25%' }} />
+            <span key={i} className="w-1 rounded-full bg-emerald-400" style={{ height: '25%' }} />
           ))}
         </div>
       )}

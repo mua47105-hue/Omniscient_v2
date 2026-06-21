@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { FreeSignalsCard } from '@/components/brain/FreeSignalsCard';
 import { Sparkline } from '@/components/brain/Sparkline';
 import { ThinkingIndicator } from '@/components/brain/ThinkingIndicator';
+import { TriggerBreakdown } from '@/components/brain/TriggerBreakdown';
 
 // ---- Types mirroring src/lib/brain/state.ts ----
 interface AssetWatch {
@@ -285,6 +286,25 @@ export function BrainPanel() {
           sub={`${stats?.triggersNews ?? 0} news · ${stats?.triggersCrossAsset ?? 0} x-asset · ${stats?.triggersManual ?? 0} manual`}
         />
       </div>
+
+      {/* Trigger breakdown donut — visual split of news / cross-asset / manual
+          triggers. Compact inline card so the autonomy volume is visible at a
+          glance, not just numbers. */}
+      <Card className="border-border/60 ring-1 ring-inset ring-border/30">
+        <CardContent className="p-4 flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-fuchsia-400" />
+            <span className="text-sm font-semibold">Trigger Breakdown</span>
+            <span className="text-[10px] text-muted-foreground ml-1">autonomy sources</span>
+          </div>
+          <TriggerBreakdown
+            news={stats?.triggersNews ?? 0}
+            crossAsset={stats?.triggersCrossAsset ?? 0}
+            manual={stats?.triggersManual ?? 0}
+            size={96}
+          />
+        </CardContent>
+      </Card>
 
       {/* Budget bar + token-economy timeline */}
       <Card className="border-border/60 ring-1 ring-inset ring-border/30">

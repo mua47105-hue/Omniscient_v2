@@ -347,3 +347,30 @@ Task: QA + "Brain thinking" live indicator + every-tick news triggers + watch-ic
 - Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously + populate the Self-Tune History card.
 - News triggers now run every 60s — will fire + count the moment breaking news lands (sub-minute response).
 - Next cron could: (a) wire on-chain hashrate-trend as a consensus fundamental layer, (b) make the self-tune history a step-chart of threshold values, (c) add a "trigger stats" breakdown chart (news vs cross-asset vs manual over time), (d) add a GitHub token setting to raise dev-activity rate limit to 5000/hr, (e) color-contrast tweak on the thinking waveform (VLM's only nit).
+
+---
+Task ID: 11
+Agent: main (15-min cron review #9)
+Task: QA + fix tokensSaved double-count bug + trigger-breakdown donut + thinking-waveform contrast.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 161/165 ticks ok — lastErr: none). Brain running, auto mode, 92 ticks, 2 LLM calls, 58 skips (57 budget-skips), 11 assets watched. Lint clean, no runtime errors. All 9 pages render 200.
+- QA: found a real token-accounting bug while reviewing the budget-skip path.
+
+## Bug fixed
+1. **tokensSaved double-counting** (`src/lib/brain/state.ts`): `recordBudgetSkip()` was adding to `tokensSaved`, AND the tick route called BOTH `recordSkip()` (which adds to tokensSaved) + `recordBudgetSkip()` for budget-skips/cooldown-skips → double-counting saved tokens. This inflated the savings % on the scoreboard. FIX: `recordBudgetSkip()` now only increments the `budgetSkips` counter (for the "unanimous + budget" breakdown) and does NOT touch `tokensSaved` — the companion `recordSkip()` call already handles that. Real correctness fix; existing accumulated value is forward-only (pre-fix double-count stays, new skips are accurate).
+
+## Completed modifications
+2. **Trigger-breakdown donut chart** (`src/components/brain/TriggerBreakdown.tsx` + wired into BrainPanel): compact inline-SVG donut (no chart lib) showing the news / cross-asset / manual trigger split as colored arcs (amber/violet/sky) with a center total + legend. Empty state shows a dashed muted ring. Added as a compact card between the scoreboard + Token Economy card. VLM: 7/10 ("adds value, visually breaks down trigger sources, proportions more intuitive than raw numbers"). Addresses worklog rec (c).
+3. **Thinking-waveform contrast** (`src/components/brain/ThinkingIndicator.tsx`): per VLM's nit — the waveform bars were `w-0.5 bg-emerald-400`, now `w-1 bg-emerald-300` + a `drop-shadow(0 0 3px rgba(16,185,129,0.6))` glow so the bars pop against the gradient background. Idle bars also widened to w-1.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 161/165 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: Trigger Breakdown donut renders with alt text "Trigger breakdown: 1 total (0 news, 0 cross-asset, 1 manual)" — correct counts + accessibility.
+- tokensSaved accounting: fix is forward-only (existing 270 stays, new skips count once).
+- VLM: donut 7/10 ("adds value, visually breaks down trigger sources, well-integrated below Triggers Fired").
+
+## Unresolved / next-phase recommendations
+- Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously + populate the Self-Tune History card.
+- News triggers run every 60s — will fire + count + populate the donut the moment breaking news lands.
+- Next cron could: (a) wire on-chain hashrate-trend as a consensus fundamental layer, (b) make the self-tune history a step-chart of threshold values, (c) add hover interactivity to the donut (VLM nit), (d) add a GitHub token setting to raise dev-activity rate limit, (e) add a "tokensSaved over time" area chart (distinct from the used-vs-saved sparkline).

@@ -389,9 +389,12 @@ export function recordCacheHit(estimatedSavedTokens: number): void {
   s.stats.tokensSaved += estimatedSavedTokens;
 }
 export function recordBudgetSkip(estimatedSavedTokens: number): void {
-  const s = state();
-  s.stats.budgetSkips++;
-  s.stats.tokensSaved += estimatedSavedTokens;
+  // NOTE: does NOT add to tokensSaved — the companion recordSkip() call already
+  // does that. recordBudgetSkip only counts the budget-skip counter so the
+  // scoreboard can show "unanimous + budget" breakdown. (Previously both added
+  // to tokensSaved, double-counting — fixed.)
+  void estimatedSavedTokens;
+  state().stats.budgetSkips++;
 }
 export function recordAlert(): void {
   state().stats.alertsSent++;
