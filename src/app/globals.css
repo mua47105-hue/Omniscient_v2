@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+   Design tokens — dark-theme-first shadcn/ui (New York preset, neutral base)
+   All values in oklch (Tailwind 4 default).
+---------------------------------------------------------------------------- */
+:root {
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: oklch(0.16 0.012 264);
+  --foreground: oklch(0.97 0.005 264);
+  --card: oklch(0.20 0.014 264);
+  --card-foreground: oklch(0.97 0.005 264);
+  --popover: oklch(0.20 0.014 264);
+  --popover-foreground: oklch(0.97 0.005 264);
+  --primary: oklch(0.65 0.18 256);
+  --primary-foreground: oklch(0.98 0.005 264);
+  --secondary: oklch(0.27 0.018 264);
+  --secondary-foreground: oklch(0.97 0.005 264);
+  --muted: oklch(0.25 0.012 264);
+  --muted-foreground: oklch(0.70 0.012 264);
+  --accent: oklch(0.30 0.020 264);
+  --accent-foreground: oklch(0.97 0.005 264);
+  --destructive: oklch(0.65 0.22 25);
+  --destructive-foreground: oklch(0.98 0.005 264);
+  --border: oklch(0.30 0.014 264 / 0.85);
+  --input: oklch(0.25 0.012 264);
+  --ring: oklch(0.65 0.18 256);
+  --chart-1: oklch(0.65 0.18 256);
+  --chart-2: oklch(0.70 0.16 165);
+  --chart-3: oklch(0.72 0.18 80);
+  --chart-4: oklch(0.65 0.22 320);
+  --chart-5: oklch(0.70 0.18 25);
+  --sidebar: oklch(0.18 0.012 264);
+  --sidebar-foreground: oklch(0.97 0.005 264);
+  --sidebar-primary: oklch(0.65 0.18 256);
+  --sidebar-primary-foreground: oklch(0.98 0.005 264);
+  --sidebar-accent: oklch(0.27 0.018 264);
+  --sidebar-accent-foreground: oklch(0.97 0.005 264);
+  --sidebar-border: oklch(0.30 0.014 264 / 0.7);
+  --sidebar-ring: oklch(0.65 0.18 256);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* ---------------------------------------------------------------------------
+   Thin scrollbar — used by sidebar, scroll-areas, feed lists
+---------------------------------------------------------------------------- */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: var(--muted);
+  border-radius: 9999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+
+/* ---------------------------------------------------------------------------
+   Ambient glow keyframes — used by the brain header
+---------------------------------------------------------------------------- */
+@keyframes ambient-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.05); }
+}
+.ambient-glow {
+  animation: ambient-pulse 4s ease-in-out infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Scrolling ticker
+---------------------------------------------------------------------------- */
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-ticker {
+  animation: ticker-scroll 40s linear infinite;
+}
+.animate-ticker:hover {
+  animation-play-state: paused;
+}
+
+/* ---------------------------------------------------------------------------
+   Utility: gradient text
+---------------------------------------------------------------------------- */
+.text-gradient {
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}

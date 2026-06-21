@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model LlmProvider {
+  id String @id @default(cuid())
+  name String @unique
+  baseUrl String
+  apiKey String
+  isActive Boolean @default(true)
+  notes String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  models LlmModel[]
+  moduleConfigs ModuleModelConfig[]
+}
+model LlmModel {
+  id String @id @default(cuid())
+  providerId String
+  provider LlmProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  modelId String
+  displayName String
+  contextWindow Int @default(128000)
+  freeTierRpm Int @default(10)
+  isActive Boolean @default(true)
+  capabilities String @default("text")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([providerId, modelId])
+  moduleConfigs ModuleModelConfig[]
+}
+model ModuleModelConfig {
+  id String @id @default(cuid())
+  moduleKey String
+  layer String
+  modelId String
+  model LlmModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  providerId String
+  provider LlmProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  temperature Float @default(0.3)
+  systemPrompt String?
+  enabled Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([moduleKey, layer])
+}
+model Asset {
+  id String @id @default(cuid())
+  symbol String @unique
+  name String
+  assetClass String
+  exchange String?
+  meta String @default("{}")
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  snapshots DataSnapshot[]
+  signals Signal[]
+}
+model Watchlist {
+  id String @id @default(cuid())
+  name String @unique
+  assetClass String?
+  symbols String @default("[]")
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model DataSnapshot {
+  id String @id @default(cuid())
+  assetId String
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  timestamp DateTime @default(now())
+  layer String
+  source String
+  payload String
+}
+model Signal {
+  id String @id @default(cuid())
+  assetId String
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  timestamp DateTime @default(now())
+  direction String
+  conviction Int
+  timeframe String @default("4h")
+  layersSummary String @default("{}")
+  modelsUsed String @default("[]")
+  entryPrice Float?
+  stopLoss Float?
+  takeProfit Float?
+  rationale String
+  status String @default("open")
+  expiresAt DateTime?
+  outcomes SignalOutcome[]
+  alerts Alert[]
+}
+model SignalOutcome {
+  id String @id @default(cuid())
+  signalId String
+  signal Signal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  horizon String
+  expected String
+  actual String?
+  pnlPct Float?
+  grade String?
+  gradedAt DateTime?
+  createdAt DateTime @default(now())
+}
+model Alert {
+  id String @id @default(cuid())
+  signalId String?
+  signal Signal? @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  channel String
+  status String @default("pending")
+  payload String @default("{}")
+  sentAt DateTime?
+  error String?
+  createdAt DateTime @default(now())
+}
+model PriceAlert {
+  id String @id @default(cuid())
+  assetSymbol String
+  condition String
+  targetPrice Float
+  currentPrice Float?
+  status String @default("active")
+  channel String @default("dashboard")
+  note String?
+  triggeredAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([assetSymbol])
+  @@index([status])
+}
+model NewsItem {
+  id String @id @default(cuid())
+  source String
+  url String?
+  title String
+  body String?
+  publishedAt DateTime
+  sentiment Float?
+  impact String?
+  assetsTagged String @default("[]")
+  analyzed Boolean @default(false)
+  createdAt DateTime @default(now())
+  @@index([publishedAt])
+  @@index([source])
+}
+model IpoIcoItem {
+  id String @id @default(cuid())
+  type String
+  name String
+  symbol String?
+  date DateTime?
+  exchange String?
+  details String @default("{}")
+  analysis String?
+  createdAt DateTime @default(now())
+}
+model Report {
+  id String @id @default(cuid())
+  type String
+  period String
+  title String
+  contentMd String
+  createdAt DateTime @default(now())
+  @@unique([type, period])
+}
+model PortfolioHolding {
+  id String @id @default(cuid())
+  assetSymbol String
+  quantity Float
+  entryPrice Float
+  entryDate DateTime @default(now())
+  notes String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([assetSymbol])
+}
+model ScheduleJob {
+  id String @id @default(cuid())
+  moduleKey String @unique
+  cronExpr String
+  enabled Boolean @default(true)
+  lastRunAt DateTime?
+  nextRunAt DateTime?
+  lastStatus String?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model Setting {
+  id String @id @default(cuid())
+  key String @unique
+  value String
+  updatedAt DateTime @updatedAt
+}

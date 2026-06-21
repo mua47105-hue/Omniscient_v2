@@ -1,2 +1,6 @@
-skills/
-node_modules/
+node_modules
+.next
+dev.log
+server.log
+db/*.db
+db/*.db-journal
