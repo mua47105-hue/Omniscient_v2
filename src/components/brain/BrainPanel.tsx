@@ -155,23 +155,36 @@ export function BrainPanel() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl flex items-center gap-2">
-            <Brain className="h-6 w-6 text-sky-400" />
-            The Lazy Brain
+      {/* Header — elevated: gradient title with glow, animated status badge */}
+      <div className="relative flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div aria-hidden className="absolute -left-2 -top-6 h-24 w-24 rounded-full bg-sky-500/10 blur-3xl pointer-events-none" />
+        <div className="relative">
+          <h1 className="text-2xl font-bold tracking-tight md:text-3xl flex items-center gap-2.5">
+            <span className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500/30 to-teal-500/10 ring-1 ring-inset ring-sky-500/25">
+              <Brain className="h-5 w-5 text-sky-400" />
+            </span>
+            <span className="bg-gradient-to-r from-sky-300 via-sky-400 to-teal-300 bg-clip-text text-transparent">
+              The Lazy Brain
+            </span>
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             Autonomous orchestration · ponytail-token economy · manual override
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant={running ? 'default' : 'secondary'} className={cn('gap-1', running ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/15 text-rose-400 border-rose-500/30')}>
-            <span className={cn('h-1.5 w-1.5 rounded-full', running ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400')} />
-            {running ? 'AUTONOMOUS' : 'PAUSED'}
-          </Badge>
-          <Badge variant="outline" className="gap-1 capitalize">{snap?.mode ?? '—'} mode</Badge>
+          <motion.div
+            animate={running ? { scale: [1, 1.04, 1] } : {}}
+            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            <Badge variant={running ? 'default' : 'secondary'} className={cn('gap-1.5 px-2.5 py-1 text-xs font-semibold', running ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-[0_0_12px_-2px_rgba(16,185,129,0.4)]' : 'bg-rose-500/15 text-rose-400 border-rose-500/30')}>
+              <span className={cn('relative flex h-2 w-2', running && '')}>
+                {running && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />}
+                <span className={cn('relative inline-flex h-2 w-2 rounded-full', running ? 'bg-emerald-400' : 'bg-rose-400')} />
+              </span>
+              {running ? 'AUTONOMOUS' : 'PAUSED'}
+            </Badge>
+          </motion.div>
+          <Badge variant="outline" className="gap-1 capitalize px-2.5 py-1 text-xs">{snap?.mode ?? '—'} mode</Badge>
         </div>
       </div>
 

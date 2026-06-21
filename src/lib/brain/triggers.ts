@@ -64,7 +64,7 @@ export function checkCrossAssetTriggers(): TriggerResult[] {
       // Don't re-queue a follower that was JUST analyzed (within 2 min) —
       // avoids a trigger storm when the anchor stays volatile across ticks.
       if (fw && (Date.now() - fw.lastAnalyzedAt) < 2 * 60 * 1000) continue;
-      forceRun(f);
+      forceRun(f, 'cross-asset');
       queued.push(f);
     }
     if (queued.length > 0) {

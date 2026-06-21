@@ -206,3 +206,36 @@ Task: QA + news-event triggers (deeper autonomy) + token-economy timeline sparkl
 - News triggers run on the 15-min scan cadence. Could be moved to every 60s tick for sub-minute breaking-news response (needs a short RSS cache to stay free-tier-safe). Currently acceptable — force-run queue is processed every tick, so queued assets analyze within 60s of the trigger firing.
 - Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
 - Next cron could: (a) add a self-tune history mini-chart showing threshold evolution over time, (b) wire on-chain hashrate-trend as a consensus fundamental layer, (c) add a "triggered by" badge on signals that were force-run'd by a news/cross-asset trigger (traceability), (d) move news triggers to every-tick with a 5-min RSS cache for faster breaking-news response.
+
+---
+Task ID: 6
+Agent: main (15-min cron review #4)
+Task: QA + trigger traceability (signals "triggered by" badge) + brain header elevation.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 57/61 ticks ok — lastErr: none, the 4 errors historical). Brain running, auto mode, 77 ticks, 7 LLM calls, 2791 used / 7020 saved (72% saved). 20 timeline samples. Lint clean, no runtime errors.
+- QA via agent-browser + VLM: all 7 pages render 200. VLM flagged brain header as flat + visual hierarchy could be stronger. totalGraded still 0 (signals need 24h to expire).
+
+## Completed modifications
+1. **"Triggered by" traceability** — closes the autonomy loop visibly. When a news/cross-asset/manual trigger force-runs an asset, the resulting signal is now stamped with its trigger source so operators can trace WHY it was analyzed.
+   - `src/lib/brain/state.ts`: force-run queue upgraded from `Set<string>` to `Map<string,string>` (symbol→source). `forceRun(symbol, source)` accepts 'manual'|'news'|'cross-asset'. `consumeForceRunQueue()` returns `{symbol, source}[]`.
+   - `src/lib/brain/triggers.ts` + `news-triggers.ts`: pass their source ('cross-asset'/'news'). `src/app/api/brain/route.ts` manual force-run passes 'manual'.
+   - `src/app/api/scheduler/tick/route.ts`: `analyzeAsset` accepts `triggerSource` param, stamps rationale as `[trigger:SOURCE] ...` (no schema migration — ponytail: reuse the existing rationale field). `runForcedAnalysis` carries the source from queue→analyzeAsset.
+   - `src/components/signals/SignalsFeedClient.tsx`: `parseTrigger()` helper strips the prefix + returns the source; renders a colored "Triggered by {source}" badge (amber=news, violet=cross-asset, sky=manual) above the rationale.
+2. **Brain header elevation** (`src/components/brain/BrainPanel.tsx`) — addresses VLM feedback. Gradient title (sky-300→sky-400→teal-300, transparent clip), brain icon in a rounded gradient chip with ring, ambient blur glow behind the header, animated AUTONOMOUS badge (framer-motion scale pulse + ping dot + emerald glow shadow). VLM: 7/10 → 8/10 polish.
+
+## Bug fixed
+3. **Hot-reload type-migration crash**: `forceRunQueue` changed from `Set` to `Map`, but the running dev server's stale singleton still had a `Set`. The old guard `if (!s.forceRunQueue)` didn't fire (Set is truthy). FIX: guard now checks `if (!(s.forceRunQueue instanceof Map))` — replaces a stale-typed field. General lesson: hot-reload migration guards must check the TYPE, not just existence, when a field's type changes.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 57/61 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- Trigger stamping verified end-to-end: force-run BTC → tick processes queue (forced: BTCUSDT, tier 2, "manual-force-run") → signal rationale = "[trigger:manual] [technical] RSI 68...". Signals page renders "Triggered by" badge.
+- agent-browser: brain page renders elevated gradient header + animated AUTONOMOUS badge; signals page renders "Triggered by" badge.
+- VLM: brain header 8/10 ("premium feel, gradient + glow tasteful").
+- Brain stats: 77 ticks, 20 samples, 7 LLM calls, 2791 used / 7020 saved (72%).
+
+## Unresolved / next-phase recommendations
+- GitHub dev-activity data source (todo deferred this round — would add commit-count for top crypto repos as another zero-token FreeSignalsCard column). High value, low effort.
+- Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
+- News/cross-asset triggers will stamp their source on signals the moment they fire — traceability is now ready for when triggers activate.
+- Next cron could: (a) GitHub dev-activity source, (b) self-tune history mini-chart, (c) wire on-chain hashrate-trend as a consensus fundamental, (d) a "trigger stats" tile on the brain page (count of news/cross-asset/manual triggers fired).

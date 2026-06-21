@@ -21,6 +21,7 @@ import {
   Layers,
   Cpu,
   Clock,
+  Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 import { Card, CardContent } from '@/components/ui/card';
@@ -127,6 +128,15 @@ function convictionGradient(v: number): string {
   // amber, high shows emerald. The fill itself stops at v% of the bar.
   const stop = Math.max(10, Math.min(90, v));
   return `linear-gradient(90deg, #f43f5e 0%, #f59e0b ${stop * 0.6}%, #10b981 ${stop}%, #10b981 100%)`;
+}
+
+// Parse the "[trigger:SOURCE]" prefix the brain stamps on force-run'd signals.
+// Returns the source ('manual'|'news'|'cross-asset') + the rationale with the
+// prefix stripped, so operators see a clean "Triggered by: news" badge instead
+// of a raw tag. Auto-scanned signals have no prefix → source null.
+function parseTrigger(rationale: string): { source: string | null; clean: string } {
+  const m = rationale.match(/^\[trigger:(manual|news|cross-asset)\]\s*(.*)$/s);
+  return m ? { source: m[1], clean: m[2] } : { source: null, clean: rationale };
 }
 
 function formatPrice(p: number | null | undefined): string {
@@ -324,17 +334,34 @@ function SignalCard({ signal, index }: { signal: Signal; index: number }) {
             </div>
           )}
 
-          {/* Rationale */}
-          {signal.rationale && (
-            <div
-              className={cn(
-                'max-h-32 overflow-y-auto pr-1 text-xs text-muted-foreground leading-relaxed',
-                '[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent',
-              )}
-            >
-              {signal.rationale}
-            </div>
-          )}
+          {/* Rationale — with optional "Triggered by" badge for force-run'd signals */}
+          {signal.rationale && (() => {
+            const { source, clean } = parseTrigger(signal.rationale);
+            return (
+              <div className="space-y-1.5">
+                {source && (
+                  <div className="flex items-center gap-1.5">
+                    <Badge variant="outline" className={cn('px-1.5 py-0 text-[10px] gap-1',
+                      source === 'news' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' :
+                      source === 'cross-asset' ? 'bg-violet-500/15 text-violet-400 border-violet-500/30' :
+                      'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                    )}>
+                      <Zap className="h-2.5 w-2.5" />
+                      Triggered by {source}
+                    </Badge>
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    'max-h-32 overflow-y-auto pr-1 text-xs text-muted-foreground leading-relaxed',
+                    '[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent',
+                  )}
+                >
+                  {clean}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Layers + models */}
           <div className="space-y-2 pt-1 border-t border-border/40">

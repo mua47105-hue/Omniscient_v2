@@ -166,7 +166,7 @@ export async function checkNewsTriggers(maxAgeMs = 60 * 60 * 1000): Promise<News
   // Queue mentioned assets for re-analysis + record a visible action.
   if (queuedAssets.size > 0) {
     const symbols = Array.from(queuedAssets);
-    for (const s of symbols) forceRun(s);
+    for (const s of symbols) forceRun(s, 'news');
     recordAction({
       symbol: 'NEWS→TRIGGER',
       action: 'news-event',

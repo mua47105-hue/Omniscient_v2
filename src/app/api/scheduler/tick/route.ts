@@ -96,6 +96,7 @@ async function analyzeAsset(
   defaultThreshold: any,
   llmCfg: Awaited<ReturnType<typeof resolveModel>>,
   forceDeep = false, // manual force-run: bypass the gate, always tier 2
+  triggerSource: 'manual' | 'news' | 'cross-asset' | 'auto' = 'auto',
 ): Promise<any> {
   const now = Date.now();
   const config = getConfig();
@@ -259,7 +260,10 @@ async function analyzeAsset(
       entryPrice: consensus.entryPrice,
       stopLoss: consensus.stopLoss,
       takeProfit: consensus.takeProfit,
-      rationale: consensus.rationale,
+      // Stamp the trigger source as a machine-readable prefix on the rationale
+      // so the signals feed can show a "triggered by" badge without a schema
+      // migration. Auto-scans have no prefix (the common case).
+      rationale: triggerSource !== 'auto' ? `[trigger:${triggerSource}] ${consensus.rationale}` : consensus.rationale,
       status: 'open',
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     },
@@ -307,19 +311,22 @@ async function runCryptoScan(sendAlerts: boolean) {
   return results;
 }
 
-/** Manual override — deep-analyze the force-run queue, even when paused. */
+/** Manual override — deep-analyze the force-run queue, even when paused.
+ *  Carries the trigger source (manual/news/cross-asset) so the resulting
+ *  signal can be stamped with WHY it was analyzed. */
 async function runForcedAnalysis(sendAlerts: boolean) {
-  const symbols = consumeForceRunQueue();
-  if (symbols.length === 0) return [];
-  const assets = await db.asset.findMany({ where: { symbol: { in: symbols }, isActive: true } });
+  const queue = consumeForceRunQueue();
+  if (queue.length === 0) return [];
+  const assets = await db.asset.findMany({ where: { symbol: { in: queue.map((q) => q.symbol) }, isActive: true } });
   if (assets.length === 0) return [];
   const thresholds = await getSetting(SETTING_KEYS.alertThresholds, {});
   const defaultThreshold = await getSetting(SETTING_KEYS.defaultThreshold, { minConviction: 60, directions: ['long', 'short'] });
   const llmCfg = await resolveModel('crypto_technical', 'deep_reasoning');
   const results: any[] = [];
   for (const asset of assets) {
+    const source = queue.find((q) => q.symbol === asset.symbol)?.source ?? 'manual';
     try {
-      results.push(await analyzeAsset(asset, sendAlerts, thresholds, defaultThreshold, llmCfg, true));
+      results.push(await analyzeAsset(asset, sendAlerts, thresholds, defaultThreshold, llmCfg, true, source));
     } catch (e: any) {
       results.push({ symbol: asset.symbol, error: e.message });
     }

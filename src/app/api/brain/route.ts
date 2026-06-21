@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
         break;
       }
       case 'forceRun':
-        if (typeof body.symbol === 'string' && body.symbol.trim()) forceRun(body.symbol.trim());
+        if (typeof body.symbol === 'string' && body.symbol.trim()) forceRun(body.symbol.trim(), 'manual');
         else return NextResponse.json<ApiResult<never>>({ success: false, error: 'symbol required' }, { status: 400 });
         break;
       case 'resetBudget':

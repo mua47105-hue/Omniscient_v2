@@ -116,9 +116,9 @@ interface BrainStateInternal {
   budgetWindowStart: number;
   recentActions: BrainAction[];
   hydrated: boolean;
-  // Manual override queue: symbols the operator force-ran. Processed even when
-  // the autonomous brain is paused, and always at deep tier (bypass the gate).
-  forceRunQueue: Set<string>;
+  // Manual override queue: symbol → trigger source ('manual'|'news'|'cross-asset').
+  // Processed even when the autonomous brain is paused, always at deep tier.
+  forceRunQueue: Map<string, string>;
   // Token-economy timeline samples — one per tick, ring-buffered (capped) so
   // the savings sparkline has history without unbounded memory growth.
   statsSamples: StatsSample[];
@@ -139,19 +139,20 @@ function freshState(): BrainStateInternal {
     budgetWindowStart: now,
     recentActions: [],
     hydrated: false,
-    forceRunQueue: new Set(),
+    forceRunQueue: new Map(),
     statsSamples: [],
   };
 }
 
 function state(): BrainStateInternal {
   if (!g.__omniscientBrain) g.__omniscientBrain = freshState();
-  // Hot-reload migration: if the cached state predates a new field (e.g.
-  // statsSamples added later), backfill it so the running dev server doesn't
-  // crash on a stale singleton. Each new field needs a one-line guard here.
+  // Hot-reload migration: if the cached state predates a new field OR a field's
+  // type changed (e.g. forceRunQueue Set→Map), backfill/replace it so a stale
+  // singleton from a previous code version doesn't crash. Each field needs a
+  // guard here that checks BOTH existence AND the expected type.
   const s = g.__omniscientBrain;
   if (!s.statsSamples) s.statsSamples = [];
-  if (!s.forceRunQueue) s.forceRunQueue = new Set();
+  if (!(s.forceRunQueue instanceof Map)) s.forceRunQueue = new Map();
   return s;
 }
 
@@ -198,12 +199,13 @@ export function getMode(): BrainMode {
 }
 
 // Force a re-analysis of an asset on the next tick, regardless of the gate.
-// Queues the symbol + clears its cached verdict so the gate can't skip it.
-// Works even when the autonomous brain is paused — this is the manual override.
-export function forceRun(symbol: string): void {
+// `source` records WHY (manual | news | cross-asset) so the resulting signal
+// can be stamped with its trigger for operator traceability. Works even when
+// the autonomous brain is paused — this is the manual override.
+export function forceRun(symbol: string, source: 'manual' | 'news' | 'cross-asset' = 'manual'): void {
   const s = state();
   const sym = symbol.toUpperCase();
-  s.forceRunQueue.add(sym);
+  s.forceRunQueue.set(sym, source);
   const w = s.watch.get(sym);
   if (w) {
     w.lastAnalyzedAt = 0;
@@ -212,10 +214,10 @@ export function forceRun(symbol: string): void {
   }
 }
 
-/** Drain the force-run queue. Returns the symbols to deep-analyze this tick. */
-export function consumeForceRunQueue(): string[] {
+/** Drain the force-run queue. Returns symbol→source pairs to deep-analyze this tick. */
+export function consumeForceRunQueue(): { symbol: string; source: string }[] {
   const s = state();
-  const out = Array.from(s.forceRunQueue);
+  const out = Array.from(s.forceRunQueue.entries()).map(([symbol, source]) => ({ symbol, source }));
   s.forceRunQueue.clear();
   return out;
 }
