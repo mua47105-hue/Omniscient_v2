@@ -1,0 +1,890 @@
+     1→'use client';
+     2→
+     3→import * as React from 'react';
+     4→import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+     5→import { motion } from 'framer-motion';
+     6→import {
+     7→  BrainCircuit,
+     8→  Pause,
+     9→  Play,
+    10→  RotateCcw,
+    11→  Zap,
+    12→  DatabaseZap,
+    13→  Eye,
+    14→  Ban,
+    15→  Gauge,
+    16→  Activity,
+    17→  Sparkles,
+    18→  History,
+    19→} from 'lucide-react';
+    20→import {
+    21→  Card,
+    22→  CardContent,
+    23→  CardHeader,
+    24→  CardTitle,
+    25→} from '@/components/ui/card';
+    26→import { Button } from '@/components/ui/button';
+    27→import { Badge } from '@/components/ui/badge';
+    28→import { Progress } from '@/components/ui/progress';
+    29→import { Switch } from '@/components/ui/switch';
+    30→import { Slider } from '@/components/ui/slider';
+    31→import { ScrollArea } from '@/components/ui/scroll-area';
+    32→import { Separator } from '@/components/ui/separator';
+    33→import { ThinkingIndicator } from './ThinkingIndicator';
+    34→import { TriggerBreakdown, type TriggerSegment } from './TriggerBreakdown';
+    35→import { Sparkline } from './Sparkline';
+    36→import { SavedAreaChart } from './SavedAreaChart';
+    37→import { EdgeSourcesCard } from './EdgeSourcesCard';
+    38→import { FreeSignalsCard } from './FreeSignalsCard';
+    39→import { cn } from '@/lib/utils';
+    40→
+    41→// ---------------------------------------------------------------------------
+    42→// Types — mirror of the brain state.ts snapshot
+    43→// ---------------------------------------------------------------------------
+    44→
+    45→interface BrainAction {
+    46→  ts: number;
+    47→  symbol: string;
+    48→  action: 'skip' | 'cache' | 'analyze' | 'alert' | 'trigger' | 'tune' | 'grade';
+    49→  reason: string;
+    50→  tier?: number;
+    51→  tokens?: number;
+    52→  source?: 'manual' | 'news' | 'cross-asset' | 'scheduler';
+    53→}
+    54→
+    55→interface AssetWatch {
+    56→  symbol: string;
+    57→  lastAnalyzedAt: number;
+    58→  lastVerdict?: string;
+    59→  lastNoteworthiness: number;
+    60→  regime: 'trending' | 'ranging' | 'volatile';
+    61→  action: 'skip' | 'cache' | 'analyze';
+    62→  updatedAt: number;
+    63→  lastDataSig?: string;
+    64→}
+    65→
+    66→interface TuneEvent {
+    67→  ts: number;
+    68→  field: string;
+    69→  from: number;
+    70→  to: number;
+    71→  reason: string;
+    72→  winRate: number;
+    73→  sampleSize: number;
+    74→}
+    75→
+    76→interface BrainConfig {
+    77→  minNoteworthiness: number;
+    78→  highNoteworthiness: number;
+    79→  unanimousConviction: number;
+    80→  unanimousAgreement: number;
+    81→  cacheTtlMs: number;
+    82→  minReanalyzeMs: number;
+    83→  budgetCap: number;
+    84→  budgetWindowMs: number;
+    85→}
+    86→
+    87→interface BrainSnapshot {
+    88→  running: boolean;
+    89→  mode: 'auto' | 'manual';
+    90→  config: BrainConfig;
+    91→  hydrated: boolean;
+    92→  budgetUsed: number;
+    93→  budgetWindowStart: number;
+    94→  budgetCap: number;
+    95→  budgetRemaining: number;
+    96→  budgetExhausted: boolean;
+    97→  llmCooldownUntil: number;
+    98→  llmInCooldown: boolean;
+    99→  llmConsecutiveFailures: number;
+   100→  thinking: boolean;
+   101→  tickStartTs: number;
+   102→  lastTickDurationMs: number;
+   103→  stats: {
+   104→    ticksTotal: number;
+   105→    llmCallsTotal: number;
+   106→    tokensUsed: number;
+   107→    tokensSaved: number;
+   108→    cacheHits: number;
+   109→    budgetSkips: number;
+   110→    triggersNews: number;
+   111→    triggersCrossAsset: number;
+   112→    triggersManual: number;
+   113→    alertsSent: number;
+   114→  };
+   115→  watch: AssetWatch[];
+   116→  recentActions: BrainAction[];
+   117→  statsSamples: Array<{ ts: number; tokensUsed: number; tokensSaved: number; llmCalls: number; skips: number }>;
+   118→  tuneEvents: TuneEvent[];
+   119→  forceRunQueue: Array<[string, 'manual' | 'news' | 'cross-asset' | 'scheduler']>;
+   120→}
+   121→
+   122→interface AnalyticsModelsResponse {
+   123→  models?: Array<{ model?: string; winRate?: number; totalGraded?: number }>;
+   124→  overall?: { overallAccuracy?: number; totalGraded?: number; bestModel?: string | null };
+   125→}
+   126→
+   127→// ---------------------------------------------------------------------------
+   128→// Helpers
+   129→// ---------------------------------------------------------------------------
+   130→
+   131→function fmt(n: number): string {
+   132→  if (!Number.isFinite(n)) return '0';
+   133→  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+   134→  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+   135→  return `${Math.round(n)}`;
+   136→}
+   137→
+   138→function ago(ts: number | undefined): string {
+   139→  if (!ts) return 'never';
+   140→  const diff = Date.now() - ts;
+   141→  if (diff < 0) return 'just now';
+   142→  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
+   143→  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+   144→  return `${Math.round(diff / 3_600_000)}h ago`;
+   145→}
+   146→
+   147→function humanizeReason(reason: string): string {
+   148→  if (!reason) return '—';
+   149→  return reason
+   150→    .replace(/-/g, ' ')
+   151→    .replace(/\b\w/g, (c) => c.toUpperCase());
+   152→}
+   153→
+   154→function actionColor(action: AssetWatch['action']): string {
+   155→  switch (action) {
+   156→    case 'analyze':
+   157→      return 'text-sky-300 bg-sky-500/15';
+   158→    case 'cache':
+   159→      return 'text-violet-300 bg-violet-500/15';
+   160→    case 'skip':
+   161→      return 'text-muted-foreground bg-muted/40';
+   162→  }
+   163→  return 'text-muted-foreground bg-muted/40';
+   164→}
+   165→
+   166→function tierLabel(tier?: number): string {
+   167→  if (tier === 1) return 'T1 · triage';
+   168→  if (tier === 2) return 'T2 · deep';
+   169→  return '—';
+   170→}
+   171→
+   172→function actionIcon(action: AssetWatch['action']): React.ReactNode {
+   173→  switch (action) {
+   174→    case 'analyze':
+   175→      return <Zap className="h-3 w-3 text-sky-400" />;
+   176→    case 'cache':
+   177→      return <DatabaseZap className="h-3 w-3 text-violet-300" />;
+   178→    case 'skip':
+   179→      return <Eye className="h-3 w-3 text-muted-foreground" />;
+   180→  }
+   181→  return <Eye className="h-3 w-3 text-muted-foreground" />;
+   182→}
+   183→
+   184→function regimeBadge(regime: AssetWatch['regime']): React.ReactNode {
+   185→  const map: Record<AssetWatch['regime'], { variant: 'success' | 'warning' | 'destructive'; label: string }> = {
+   186→    trending: { variant: 'success', label: 'trend' },
+   187→    ranging: { variant: 'warning', label: 'range' },
+   188→    volatile: { variant: 'destructive', label: 'vol' },
+   189→  };
+   190→  const m = map[regime];
+   191→  return <Badge variant={m.variant} className="text-[9px]">{m.label}</Badge>;
+   192→}
+   193→
+   194→// ---------------------------------------------------------------------------
+   195→// CfgSlider — small reusable control
+   196→// ---------------------------------------------------------------------------
+   197→
+   198→interface CfgSliderProps {
+   199→  label: string;
+   200→  value: number;
+   201→  min: number;
+   202→  max: number;
+   203→  step: number;
+   204→  unit?: string;
+   205→  description?: string;
+   206→  onChange: (v: number) => void;
+   207→}
+   208→
+   209→function CfgSlider({
+   210→  label,
+   211→  value,
+   212→  min,
+   213→  max,
+   214→  step,
+   215→  unit,
+   216→  description,
+   217→  onChange,
+   218→}: CfgSliderProps): React.ReactElement {
+   219→  return (
+   220→    <div className="space-y-2">
+   221→      <div className="flex items-center justify-between">
+   222→        <span className="text-[11px] font-medium text-foreground">{label}</span>
+   223→        <span className="font-mono text-[11px] text-emerald-300">
+   224→          {value.toLocaleString()}
+   225→          {unit ?? ''}
+   226→        </span>
+   227→      </div>
+   228→      <Slider
+   229→        value={[value]}
+   230→        min={min}
+   231→        max={max}
+   232→        step={step}
+   233→        onValueChange={(v) => onChange(v[0])}
+   234→      />
+   235→      {description ? (
+   236→        <p className="text-[10px] text-muted-foreground/70">{description}</p>
+   237→      ) : null}
+   238→    </div>
+   239→  );
+   240→}
+   241→
+   242→// ---------------------------------------------------------------------------
+   243→// BrainPanel — the centerpiece
+   244→// ---------------------------------------------------------------------------
+   245→
+   246→export function BrainPanel(): React.ReactElement {
+   247→  const qc = useQueryClient();
+   248→
+   249→  const brainQ = useQuery<BrainSnapshot>({
+   250→    queryKey: ['brain'],
+   251→    queryFn: async () => {
+   252→      const res = await fetch('/api/brain');
+   253→      if (!res.ok) throw new Error('brain fetch failed');
+   254→      const json: { success?: boolean; data?: BrainSnapshot } = await res.json();
+   255→      if (!json.data) throw new Error('brain: missing data');
+   256→      return json.data;
+   257→    },
+   258→    refetchInterval: 4000,
+   259→    staleTime: 3000,
+   260→  });
+   261→
+   262→  const analyticsQ = useQuery<AnalyticsModelsResponse>({
+   263→    queryKey: ['analytics-models'],
+   264→    queryFn: async () => {
+   265→      const res = await fetch('/api/analytics/models');
+   266→      if (!res.ok) throw new Error('analytics fetch failed');
+   267→      const json: { success?: boolean; data?: AnalyticsModelsResponse } = await res.json();
+   268→      return json.data ?? {};
+   269→    },
+   270→    refetchInterval: 60_000,
+   271→    staleTime: 45_000,
+   272→  });
+   273→
+   274→  const controlMut = useMutation({
+   275→    mutationFn: async (payload: Record<string, unknown>) => {
+   276→      const res = await fetch('/api/brain', {
+   277→        method: 'POST',
+   278→        headers: { 'Content-Type': 'application/json' },
+   279→        body: JSON.stringify(payload),
+   280→      });
+   281→      if (!res.ok) throw new Error('brain control failed');
+   282→      return res.json();
+   283→    },
+   284→    onSuccess: () => {
+   285→      qc.invalidateQueries({ queryKey: ['brain'] });
+   286→    },
+   287→  });
+   288→
+   289→  const b = brainQ.data;
+   290→  const samples = b?.statsSamples ?? [];
+   291→  const stats = b?.stats;
+   292→  const watch = b?.watch ?? [];
+   293→  const actions = b?.recentActions ?? [];
+   294→  const tuneEvents = b?.tuneEvents ?? [];
+   295→  const config = b?.config;
+   296→
+   297→  const tokensUsed = stats?.tokensUsed ?? 0;
+   298→  const tokensSaved = stats?.tokensSaved ?? 0;
+   299→  const gross = tokensUsed + tokensSaved;
+   300→  const savedPct = gross > 0 ? (tokensSaved / gross) * 100 : 0;
+   301→  const triggersTotal =
+   302→    (stats?.triggersNews ?? 0) +
+   303→    (stats?.triggersCrossAsset ?? 0) +
+   304→    (stats?.triggersManual ?? 0);
+   305→
+   306→  const winRate = analyticsQ.data?.overall?.overallAccuracy ?? 0;
+   307→
+   308→  // The brain API does not expose a single forceRunAll action — we iterate
+   309→  // the current watch list and queue each symbol as a manual force-run.
+   310→  const forceRunAll = React.useCallback(() => {
+   311→    if (!watch.length) return;
+   312→    for (const w of watch) {
+   313→      controlMut.mutate({ action: 'forceRun', symbol: w.symbol });
+   314→    }
+   315→  }, [watch, controlMut]);
+   316→
+   317→  const isRunning = !!b?.running;
+   318→  const inCooldown = !!b?.llmInCooldown;
+   319→  const isManual = b?.mode === 'manual';
+   320→
+   321→  const triggerSegments: TriggerSegment[] = [
+   322→    { key: 'news', label: 'News', count: stats?.triggersNews ?? 0, color: '' },
+   323→    { key: 'cross-asset', label: 'Cross-asset', count: stats?.triggersCrossAsset ?? 0, color: '' },
+   324→    { key: 'manual', label: 'Manual', count: stats?.triggersManual ?? 0, color: '' },
+   325→  ];
+   326→
+   327→  const budgetPct = b && b.budgetCap > 0 ? (b.budgetUsed / b.budgetCap) * 100 : 0;
+   328→
+   329→  return (
+   330→    <div className="space-y-4 p-4 md:p-6">
+   331→      {/* ---------- Header ---------- */}
+   332→      <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-violet-950/40 via-card to-card p-5">
+   333→        <div
+   334→          className="absolute -right-12 -top-12 h-48 w-48 rounded-full bg-violet-500/20 blur-3xl ambient-glow"
+   335→          aria-hidden
+   336→        />
+   337→        <div className="relative flex flex-wrap items-center justify-between gap-4">
+   338→          <div className="flex items-center gap-3">
+   339→            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-violet-500/15">
+   340→              <BrainCircuit className="h-5 w-5 text-violet-300" />
+   341→              <span
+   342→                className={cn(
+   343→                  'absolute -right-0.5 -top-0.5 flex h-3 w-3',
+   344→                )}
+   345→              >
+   346→                <span
+   347→                  className={cn(
+   348→                    'absolute inline-flex h-full w-full animate-ping rounded-full opacity-70',
+   349→                    !isRunning ? 'bg-rose-500' : inCooldown ? 'bg-amber-400' : 'bg-emerald-400',
+   350→                  )}
+   351→                />
+   352→                <span
+   353→                  className={cn(
+   354→                    'relative inline-flex h-3 w-3 rounded-full',
+   355→                    !isRunning ? 'bg-rose-500' : inCooldown ? 'bg-amber-400' : 'bg-emerald-400',
+   356→                  )}
+   357→                />
+   358→              </span>
+   359→            </div>
+   360→            <div className="flex flex-col gap-1">
+   361→              <h1 className="text-gradient bg-gradient-to-r from-violet-300 via-fuchsia-300 to-emerald-300 text-2xl font-bold tracking-tight">
+   362→                The Lazy Brain
+   363→              </h1>
+   364→              <div className="flex items-center gap-2">
+   365→                <motion.div
+   366→                  animate={{
+   367→                    boxShadow: isRunning
+   368→                      ? [
+   369→                          '0 0 0 0 oklch(0.72 0.18 160 / 0.6)',
+   370→                          '0 0 0 6px oklch(0.72 0.18 160 / 0)',
+   371→                        ]
+   372→                      : '0 0 0 0 oklch(0.65 0.22 25 / 0.6)',
+   373→                  }}
+   374→                  transition={{ duration: 1.6, repeat: Infinity, ease: 'easeOut' }}
+   375→                  className={cn(
+   376→                    'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+   377→                    !isRunning
+   378→                      ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
+   379→                      : inCooldown
+   380→                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+   381→                        : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+   382→                  )}
+   383→                >
+   384→                  <span
+   385→                    className={cn(
+   386→                      'h-1.5 w-1.5 rounded-full',
+   387→                      !isRunning ? 'bg-rose-400' : inCooldown ? 'bg-amber-400' : 'bg-emerald-400',
+   388→                    )}
+   389→                  />
+   390→                  {isRunning ? (inCooldown ? 'Cooldown' : 'Autonomous') : 'Paused'}
+   391→                </motion.div>
+   392→                <Badge variant={isManual ? 'warning' : 'info'} className="text-[10px]">
+   393→                  {isManual ? 'manual' : 'auto'}
+   394→                </Badge>
+   395→                <ThinkingIndicator />
+   396→              </div>
+   397→            </div>
+   398→          </div>
+   399→        </div>
+   400→      </div>
+   401→
+   402→      {/* ---------- LLM cooldown banner ---------- */}
+   403→      {inCooldown ? (
+   404→        <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+   405→          <Ban className="h-3.5 w-3.5" />
+   406→          <span>
+   407→            LLM circuit-breaker tripped — cooldown until{' '}
+   408→            <span className="font-mono">
+   409→              {new Date(b?.llmCooldownUntil ?? 0).toLocaleTimeString()}
+   410→            </span>{' '}
+   411→            ({b?.llmConsecutiveFailures ?? 0} consecutive failures). Subsequent analyses fall back to deterministic consensus.
+   412→          </span>
+   413→        </div>
+   414→      ) : null}
+   415→
+   416→      {/* ---------- Controls card ---------- */}
+   417→      <Card>
+   418→        <CardHeader>
+   419→          <CardTitle className="flex items-center gap-2">
+   420→            <Gauge className="h-4 w-4 text-violet-300" />
+   421→            Brain Controls
+   422→          </CardTitle>
+   423→        </CardHeader>
+   424→        <CardContent className="flex flex-wrap items-center gap-3">
+   425→          <Button
+   426→            variant={isRunning ? 'destructive' : 'default'}
+   427→            size="sm"
+   428→            onClick={() => controlMut.mutate({ action: isRunning ? 'pause' : 'resume' })}
+   429→            disabled={controlMut.isPending}
+   430→          >
+   431→            {isRunning ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+   432→            {isRunning ? 'Pause' : 'Resume'}
+   433→          </Button>
+   434→          <div className="flex items-center gap-2">
+   435→            <Switch
+   436→              checked={isManual}
+   437→              onCheckedChange={(checked) =>
+   438→                controlMut.mutate({ action: 'setMode', mode: checked ? 'manual' : 'auto' })
+   439→              }
+   440→            />
+   441→            <span className="text-xs text-muted-foreground">Manual mode</span>
+   442→          </div>
+   443→          <Button
+   444→            variant="outline"
+   445→            size="sm"
+   446→            onClick={() => controlMut.mutate({ action: 'resetBudget' })}
+   447→            disabled={controlMut.isPending}
+   448→          >
+   449→            <RotateCcw className="h-3.5 w-3.5" />
+   450→            Reset Budget
+   451→          </Button>
+   452→          <Button
+   453→            variant="outline"
+   454→            size="sm"
+   455→            onClick={forceRunAll}
+   456→            disabled={controlMut.isPending || !watch.length}
+   457→          >
+   458→            <Zap className="h-3.5 w-3.5" />
+   459→            Force-Run All
+   460→          </Button>
+   461→          <Separator orientation="vertical" className="hidden h-6 md:block" />
+   462→          <div className="text-[11px] text-muted-foreground">
+   463→            Last tick:{' '}
+   464→            <span className="font-mono text-foreground">
+   465→              {b?.tickStartTs ? ago(b.tickStartTs - (b.lastTickDurationMs ?? 0)) : 'never'}
+   466→            </span>
+   467→            {b?.lastTickDurationMs ? (
+   468→              <span className="ml-2 text-muted-foreground/70">
+   469→                · {b.lastTickDurationMs}ms
+   470→              </span>
+   471→            ) : null}
+   472→          </div>
+   473→        </CardContent>
+   474→      </Card>
+   475→
+   476→      {/* ---------- Scoreboard ---------- */}
+   477→      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+   478→        <ScoreTile
+   479→          label="Tokens Used"
+   480→          value={fmt(tokensUsed)}
+   481→          icon={<Activity className="h-3.5 w-3.5 text-amber-400" />}
+   482→          accent="amber"
+   483→        />
+   484→        <ScoreTile
+   485→          label="Tokens Saved"
+   486→          value={fmt(tokensSaved)}
+   487→          sub={`${savedPct.toFixed(0)}% of gross`}
+   488→          icon={<Sparkles className="h-3.5 w-3.5 text-emerald-400" />}
+   489→          accent="emerald"
+   490→        />
+   491→        <ScoreTile
+   492→          label="Cache Hits"
+   493→          value={fmt(stats?.cacheHits ?? 0)}
+   494→          icon={<DatabaseZap className="h-3.5 w-3.5 text-violet-300" />}
+   495→          accent="violet"
+   496→        />
+   497→        <ScoreTile
+   498→          label="Skips"
+   499→          value={fmt(stats?.budgetSkips ?? 0)}
+   500→          icon={<Eye className="h-3.5 w-3.5 text-amber-400" />}
+   501→          accent="amber"
+   502→        />
+   503→        <ScoreTile
+   504→          label="Win Rate"
+   505→          value={winRate > 0 ? `${winRate.toFixed(1)}%` : '—'}
+   506→          icon={<Gauge className="h-3.5 w-3.5" />}
+   507→          accent={winRate >= 55 ? 'emerald' : winRate > 0 ? 'rose' : 'muted'}
+   508→        />
+   509→        <ScoreTile
+   510→          label="Triggers Fired"
+   511→          value={fmt(triggersTotal)}
+   512→          sub={`news ${stats?.triggersNews ?? 0} · xa ${stats?.triggersCrossAsset ?? 0} · man ${stats?.triggersManual ?? 0}`}
+   513→          icon={<Zap className="h-3.5 w-3.5 text-fuchsia-300" />}
+   514→          accent="fuchsia"
+   515→        />
+   516→      </div>
+   517→
+   518→      {/* ---------- Trigger breakdown + Token economy + Cumulative saved ---------- */}
+   519→      <div className="grid gap-4 lg:grid-cols-3">
+   520→        <Card>
+   521→          <CardHeader>
+   522→            <CardTitle>Trigger Breakdown</CardTitle>
+   523→          </CardHeader>
+   524→          <CardContent>
+   525→            <TriggerBreakdown segments={triggerSegments} />
+   526→          </CardContent>
+   527→        </Card>
+   528→
+   529→        <Card>
+   530→          <CardHeader>
+   531→            <CardTitle>Token Economy</CardTitle>
+   532→          </CardHeader>
+   533→          <CardContent className="space-y-3">
+   534→            <div className="space-y-1">
+   535→              <div className="flex justify-between text-[11px] text-muted-foreground">
+   536→                <span>Budget used</span>
+   537→                <span className="font-mono text-foreground">
+   538→                  {fmt(b?.budgetUsed ?? 0)} / {fmt(b?.budgetCap ?? 0)}
+   539→                </span>
+   540→              </div>
+   541→              <Progress
+   542→                value={budgetPct}
+   543→                indicatorClassName={budgetPct > 85 ? 'bg-rose-500' : 'bg-amber-400'}
+   544→              />
+   545→            </div>
+   546→            <div className="flex items-center justify-center py-1">
+   547→              <Sparkline samples={samples} width={220} height={44} />
+   548→            </div>
+   549→            <div className="flex justify-center gap-4 text-[10px]">
+   550→              <div className="flex items-center gap-1.5 text-muted-foreground">
+   551→                <span className="h-1.5 w-3 rounded bg-amber-400" />
+   552→                used
+   553→              </div>
+   554→              <div className="flex items-center gap-1.5 text-muted-foreground">
+   555→                <span className="h-1.5 w-3 rounded bg-emerald-400" />
+   556→                saved
+   557→              </div>
+   558→            </div>
+   559→          </CardContent>
+   560→        </Card>
+   561→
+   562→        <Card>
+   563→          <CardHeader>
+   564→            <CardTitle>Cumulative Tokens Saved</CardTitle>
+   565→          </CardHeader>
+   566→          <CardContent className="space-y-3">
+   567→            <div className="flex items-baseline justify-between">
+   568→              <span className="text-3xl font-bold text-emerald-300">{fmt(tokensSaved)}</span>
+   569→              <span className="text-xs text-muted-foreground">
+   570→                {savedPct.toFixed(0)}% of gross
+   571→              </span>
+   572→            </div>
+   573→            <div className="flex items-center justify-center">
+   574→              <SavedAreaChart samples={samples} width={300} height={70} />
+   575→            </div>
+   576→          </CardContent>
+   577→        </Card>
+   578→      </div>
+   579→
+   580→      {/* ---------- Watch list + Action feed ---------- */}
+   581→      <div className="grid gap-4 lg:grid-cols-3">
+   582→        <Card className="lg:col-span-2">
+   583→          <CardHeader>
+   584→            <CardTitle>Watch List</CardTitle>
+   585→          </CardHeader>
+   586→          <CardContent>
+   587→            <ScrollArea className="h-[400px] pr-3">
+   588→              <div className="space-y-1">
+   589→                {watch.length === 0 ? (
+   590→                  <p className="py-8 text-center text-xs text-muted-foreground">
+   591→                    No assets in watch list — run a scan to populate.
+   592→                  </p>
+   593→                ) : (
+   594→                  watch.map((w) => {
+   595→                    const lastVerdict = w.lastVerdict ?? 'neutral';
+   596→                    const dir = lastVerdict.toLowerCase();
+   597→                    const conviction = Math.round(w.lastNoteworthiness);
+   598→                    return (
+   599→                      <div
+   600→                        key={w.symbol}
+   601→                        className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 rounded-md border border-transparent px-2 py-1.5 text-xs transition-colors hover:border-border hover:bg-muted/30"
+   602→                      >
+   603→                        <div className="flex items-center gap-2">
+   604→                          <span
+   605→                            className={cn(
+   606→                              'flex h-6 w-6 items-center justify-center rounded',
+   607→                              actionColor(w.action),
+   608→                            )}
+   609→                          >
+   610→                            {actionIcon(w.action)}
+   611→                          </span>
+   612→                          <span className="font-mono text-muted-foreground">
+   613→                            {w.lastNoteworthiness.toFixed(0)}
+   614→                          </span>
+   615→                        </div>
+   616→                        <div className="flex flex-col">
+   617→                          <div className="flex items-center gap-2">
+   618→                            <span className="font-medium text-foreground">{w.symbol}</span>
+   619→                            {regimeBadge(w.regime)}
+   620→                          </div>
+   621→                          <div className="text-[10px] text-muted-foreground">
+   622→                            {humanizeReason(w.action)} · {tierLabel(w.action === 'analyze' ? 1 : undefined)} · {ago(w.updatedAt)}
+   623→                          </div>
+   624→                        </div>
+   625→                        <div className="flex flex-col items-end">
+   626→                          <div className="flex items-center gap-1.5">
+   627→                            <Badge
+   628→                              variant={
+   629→                                dir === 'long'
+   630→                                  ? 'success'
+   631→                                  : dir === 'short'
+   632→                                    ? 'rose'
+   633→                                    : 'muted'
+   634→                              }
+   635→                              className="text-[9px]"
+   636→                            >
+   637→                              {dir}
+   638→                            </Badge>
+   639→                            <span className="font-mono text-[10px] text-muted-foreground">
+   640→                              {conviction}
+   641→                            </span>
+   642→                          </div>
+   643→                        </div>
+   644→                        <Button
+   645→                          variant="outline"
+   646→                          size="icon"
+   647→                          className="h-7 w-7"
+   648→                          onClick={() => controlMut.mutate({ action: 'forceRun', symbol: w.symbol })}
+   649→                          disabled={controlMut.isPending}
+   650→                          title="Force-run analysis"
+   651→                        >
+   652→                          <Zap className="h-3 w-3" />
+   653→                        </Button>
+   654→                      </div>
+   655→                    );
+   656→                  })
+   657→                )}
+   658→              </div>
+   659→            </ScrollArea>
+   660→          </CardContent>
+   661→        </Card>
+   662→
+   663→        <Card>
+   664→          <CardHeader>
+   665→            <CardTitle>Action Feed</CardTitle>
+   666→          </CardHeader>
+   667→          <CardContent>
+   668→            <ScrollArea className="h-[400px] pr-3">
+   669→              <div className="space-y-1.5">
+   670→                {actions.length === 0 ? (
+   671→                  <p className="py-8 text-center text-xs text-muted-foreground">
+   672→                    No recent actions. The brain is idle.
+   673→                  </p>
+   674→                ) : (
+   675→                  actions.slice().reverse().map((a, i) => {
+   676→                    const isAutonomy =
+   677→                      a.source === 'cross-asset' ||
+   678→                      a.source === 'news' ||
+   679→                      a.action === 'tune' ||
+   680→                      a.action === 'trigger';
+   681→                    return (
+   682→                      <div
+   683→                        key={`${a.ts}-${i}`}
+   684→                        className={cn(
+   685→                          'rounded-md border px-2 py-1.5 text-[11px]',
+   686→                          isAutonomy
+   687→                            ? 'border-violet-500/30 bg-violet-500/5'
+   688→                            : 'border-border bg-muted/20',
+   689→                        )}
+   690→                      >
+   691→                        <div className="flex items-center justify-between">
+   692→                          <span className="font-medium text-foreground">
+   693→                            {a.symbol}
+   694→                            {a.source ? (
+   695→                              <span className="ml-1 text-[9px] uppercase tracking-wider text-violet-300">
+   696→                                {a.source}
+   697→                              </span>
+   698→                            ) : null}
+   699→                          </span>
+   700→                          <span className="font-mono text-[9px] text-muted-foreground">
+   701→                            {ago(a.ts)}
+   702→                          </span>
+   703→                        </div>
+   704→                        <div className="mt-0.5 text-muted-foreground">
+   705→                          <span className="font-mono text-foreground">{a.action}</span>
+   706→                          {a.tier ? <span className="ml-1">· T{a.tier}</span> : null}
+   707→                          {a.tokens ? (
+   708→                            <span className="ml-1 text-amber-300">· {fmt(a.tokens)} tok</span>
+   709→                          ) : null}
+   710→                        </div>
+   711→                        {a.reason ? (
+   712→                          <div className="mt-0.5 text-[10px] text-muted-foreground/80">
+   713→                            {humanizeReason(a.reason)}
+   714→                          </div>
+   715→                        ) : null}
+   716→                      </div>
+   717→                    );
+   718→                  })
+   719→                )}
+   720→              </div>
+   721→            </ScrollArea>
+   722→          </CardContent>
+   723→        </Card>
+   724→      </div>
+   725→
+   726→      {/* ---------- Gate Configuration + Self-Tune History ---------- */}
+   727→      <div className="grid gap-4 lg:grid-cols-2">
+   728→        <Card>
+   729→          <CardHeader>
+   730→            <CardTitle className="flex items-center gap-2">
+   731→              <Gauge className="h-4 w-4 text-violet-300" />
+   732→              Gate Configuration
+   733→            </CardTitle>
+   734→          </CardHeader>
+   735→          <CardContent className="grid gap-4 md:grid-cols-2">
+   736→            {config ? (
+   737→              <>
+   738→                <CfgSlider
+   739→                  label="Min Noteworthiness"
+   740→                  value={config.minNoteworthiness}
+   741→                  min={0}
+   742→                  max={100}
+   743→                  step={1}
+   744→                  onChange={(v) => controlMut.mutate({ action: 'setConfig', config: { minNoteworthiness: v } })}
+   745→                />
+   746→                <CfgSlider
+   747→                  label="High Noteworthiness"
+   748→                  value={config.highNoteworthiness}
+   749→                  min={0}
+   750→                  max={100}
+   751→                  step={1}
+   752→                  onChange={(v) => controlMut.mutate({ action: 'setConfig', config: { highNoteworthiness: v } })}
+   753→                />
+   754→                <CfgSlider
+   755→                  label="Unanimous Conviction"
+   756→                  value={config.unanimousConviction}
+   757→                  min={0}
+   758→                  max={100}
+   759→                  step={1}
+   760→                  onChange={(v) => controlMut.mutate({ action: 'setConfig', config: { unanimousConviction: v } })}
+   761→                />
+   762→                <CfgSlider
+   763→                  label="Budget Cap"
+   764→                  value={config.budgetCap}
+   765→                  min={5000}
+   766→                  max={500000}
+   767→                  step={5000}
+   768→                  onChange={(v) => controlMut.mutate({ action: 'setConfig', config: { budgetCap: v } })}
+   769→                />
+   770→                <CfgSlider
+   771→                  label="Cache TTL"
+   772→                  value={Math.round(config.cacheTtlMs / 60000)}
+   773→                  min={1}
+   774→                  max={120}
+   775→                  step={1}
+   776→                  unit="min"
+   777→                  onChange={(v) => controlMut.mutate({ action: 'setConfig', config: { cacheTtlMs: v * 60000 } })}
+   778→                />
+   779→                <CfgSlider
+   780→                  label="Min Reanalyze Gap"
+   781→                  value={Math.round(config.minReanalyzeMs / 60000)}
+   782→                  min={1}
+   783→                  max={120}
+   784→                  step={1}
+   785→                  unit="min"
+   786→                  onChange={(v) => controlMut.mutate({ action: 'setConfig', config: { minReanalyzeMs: v * 60000 } })}
+   787→                />
+   788→              </>
+   789→            ) : (
+   790→              <p className="col-span-2 text-xs text-muted-foreground">Loading configuration…</p>
+   791→            )}
+   792→          </CardContent>
+   793→        </Card>
+   794→
+   795→        <Card>
+   796→          <CardHeader>
+   797→            <CardTitle className="flex items-center gap-2">
+   798→              <History className="h-4 w-4 text-emerald-300" />
+   799→              Self-Tune History
+   800→            </CardTitle>
+   801→          </CardHeader>
+   802→          <CardContent>
+   803→            <ScrollArea className="h-[260px] pr-3">
+   804→              {tuneEvents.length === 0 ? (
+   805→                <div className="flex h-full flex-col items-center justify-center gap-2 py-12 text-center">
+   806→                  <History className="h-6 w-6 text-muted-foreground/50" />
+   807→                  <p className="text-xs text-muted-foreground">
+   808→                    No self-tune events yet.
+   809→                  </p>
+   810→                  <p className="text-[10px] text-muted-foreground/70">
+   811→                    The brain nudges gate thresholds as signal grades accumulate.
+   812→                  </p>
+   813→                </div>
+   814→              ) : (
+   815→                <div className="space-y-1.5">
+   816→                  {tuneEvents.slice().reverse().map((e, i) => (
+   817→                    <div
+   818→                      key={`${e.ts}-${i}`}
+   819→                      className="rounded-md border border-border bg-muted/20 px-2 py-1.5 text-[11px]"
+   820→                    >
+   821→                      <div className="flex items-center justify-between">
+   822→                        <span className="font-mono font-medium text-foreground">{e.field}</span>
+   823→                        <span className="text-[9px] text-muted-foreground">{ago(e.ts)}</span>
+   824→                      </div>
+   825→                      <div className="mt-0.5 flex items-center gap-2 font-mono text-[10px]">
+   826→                        <span className="text-rose-300">{e.from}</span>
+   827→                        <span className="text-muted-foreground">→</span>
+   828→                        <span className="text-emerald-300">{e.to}</span>
+   829→                        <span className="ml-auto text-muted-foreground">
+   830→                          WR {(e.winRate * 100).toFixed(0)}% · n={e.sampleSize}
+   831→                        </span>
+   832→                      </div>
+   833→                      {e.reason ? (
+   834→                        <div className="mt-0.5 text-[10px] text-muted-foreground/70">{e.reason}</div>
+   835→                      ) : null}
+   836→                    </div>
+   837→                  ))}
+   838→                </div>
+   839→              )}
+   840→            </ScrollArea>
+   841→          </CardContent>
+   842→        </Card>
+   843→      </div>
+   844→
+   845→      {/* ---------- Free Signals + Edge Sources ---------- */}
+   846→      <FreeSignalsCard />
+   847→      <EdgeSourcesCard />
+   848→    </div>
+   849→  );
+   850→}
+   851→
+   852→// ---------------------------------------------------------------------------
+   853→// ScoreTile — small reusable tile
+   854→// ---------------------------------------------------------------------------
+   855→
+   856→function ScoreTile({
+   857→  label,
+   858→  value,
+   859→  sub,
+   860→  icon,
+   861→  accent,
+   862→}: {
+   863→  label: string;
+   864→  value: string;
+   865→  sub?: string;
+   866→  icon: React.ReactNode;
+   867→  accent: 'amber' | 'emerald' | 'violet' | 'fuchsia' | 'rose' | 'muted';
+   868→}): React.ReactElement {
+   869→  const accentMap: Record<typeof accent, string> = {
+   870→    amber: 'border-amber-500/30 bg-amber-500/5',
+   871→    emerald: 'border-emerald-500/30 bg-emerald-500/5',
+   872→    violet: 'border-violet-500/30 bg-violet-500/5',
+   873→    fuchsia: 'border-fuchsia-500/30 bg-fuchsia-500/5',
+   874→    rose: 'border-rose-500/30 bg-rose-500/5',
+   875→    muted: 'border-border bg-muted/20',
+   876→  };
+   877→  return (
+   878→    <div className={cn('rounded-lg border p-3', accentMap[accent])}>
+   879→      <div className="flex items-center justify-between">
+   880→        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+   881→          {label}
+   882→        </span>
+   883→        {icon}
+   884→      </div>
+   885→      <div className="mt-1 text-xl font-bold text-foreground">{value}</div>
+   886→      {sub ? <div className="mt-0.5 text-[10px] text-muted-foreground">{sub}</div> : null}
+   887→    </div>
+   888→  );
+   889→}
+   890→

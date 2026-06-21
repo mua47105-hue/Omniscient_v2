@@ -63,3 +63,25 @@ Work Log:
 
 Stage Summary:
 - ENTIRE PROJECT RECOVERED from scratch. All layers rebuilt: core lib (13 files), brain engine + edge modules (16 files), API routes (20 routes), UI components (49 files), seed + scheduler. Lint clean, all pages 200, scheduler running. The Lazy Brain is live with Pollinations (free, no key) as the default LLM. 11 assets watched, brain running, news triggers active, signals generating with vol-target sizing.
+
+---
+Task ID: 7-tool-system-pages
+Agent: tool-system-pages-builder
+Task: Rebuild 11 missing tool + system pages (portfolio, risk-calculator, backtest, strategy-builder, analytics, news, macro, economic-calendar, ipo-ico, notifications, reports, settings + sub-pages) + 12 API routes.
+
+Work Log:
+- Created all tool + system pages, components, and API routes.
+
+Stage Summary:
+- All missing pages rebuilt. Project structure now matches the original.
+
+---
+Task ID: 6-market-pages
+Agent: market-pages-builder
+Task: Rebuild 9 missing market-data pages (crypto, crypto/[symbol], markets, markets/[symbol], heat-map, correlation, screener, derivatives, multi-timeframe) + 6 API routes.
+
+Work Log:
+- Created all market-data pages, components, and API routes.
+
+Stage Summary:
+- Market-data pages rebuilt. Ready for tool + system pages.

@@ -1,0 +1,816 @@
+     1→/**
+     2→ * Scheduler tick — the Lazy Brain's main loop.
+     3→ *
+     4→ * Pinged every 60s by the mini-service on port 3042. Order of operations
+     5→ * (all best-effort — safety paths never block):
+     6→ *
+     7→ *   1.  hydrate() + tickStarted()
+     8→ *   2.  gradeExpiredSignals()      (self-learning grading loop)
+     9→ *   3.  checkPriceAlerts()         (user price thresholds)
+    10→ *   4.  runForcedAnalysis()        (drain force-run queue; works even paused)
+    11→ *   5.  checkNewsTriggers()        (every-tick RSS scan, 5-min cache)
+    12→ *   6.  Find due ScheduleJobs (parse "STAR/N MIN HR DOM MON DOW" as every N min).
+    13→ *       If none due → recordSample() + tickEnded() + return skipped.
+    14→ *   7.  For crypto_technical job: runCryptoScan(sendAlerts)
+    15→ *   8.  checkCrossAssetTriggers()  (BTC/ETH volatile → queue correlated alts)
+    16→ *   9.  selfTune()                 (best-effort)
+    17→ *   10. Supabase sync              (best-effort, dynamic import)
+    18→ *   11. recordSample() + tickEnded()
+    19→ *   12. Return {ran, skipped, grading, priceAlerts, forced, triggers,
+    20→ *              newsTriggers, tune, sync}
+    21→ *
+    22→ * analyzeAsset() is the per-asset pipeline:
+    23→ *   klines(4h,200) + orderbook(50) + funding + ticker  → computeIndicators
+    24→ *   → getOnchainTrend → deterministic computeConsensus → gateDecide
+    25→ *   → (if LLM eligible) triage/deep prompt → completeWithAutoFallback
+    26→ *   → safeParseJson (NO jsonMode — Pollinations breaks) → llmLayer
+    27→ *   → final computeConsensus → setWatch → volTargetSize → db.signal.create
+    28→ *   → alert if shouldAlert → recordAction.
+    29→ *
+    30→ * Both GET (returns ScheduleJob list + lastSchedulerTick) and POST (runs the
+    31→ * tick) are force-dynamic. POST has maxDuration=300 (5 min) so a slow scan
+    32→ * can't be killed by the platform.
+    33→ */
+    34→import { NextResponse } from 'next/server';
+    35→import db from '@/lib/db';
+    36→import {
+    37→  hydrate,
+    38→  tickStarted,
+    39→  tickEnded,
+    40→  recordSample,
+    41→  snapshot,
+    42→  consumeForceRunQueue,
+    43→  setWatch,
+    44→  recordLlmCall,
+    45→  recordLlmSuccess,
+    46→  recordLlmFailure,
+    47→  recordAlert,
+    48→  recordAction,
+    49→  isRunning,
+    50→  llmInCooldown,
+    51→  type TriggerSource,
+    52→} from '@/lib/brain/state';
+    53→import { gateDecide } from '@/lib/brain/engine';
+    54→import { selfTune } from '@/lib/brain/selftune';
+    55→import { checkCrossAssetTriggers } from '@/lib/brain/triggers';
+    56→import { checkNewsTriggers } from '@/lib/brain/news-triggers';
+    57→import { gradeExpiredSignals } from '@/lib/analysis/grading';
+    58→import { checkPriceAlerts } from '@/lib/analysis/price-alerts';
+    59→import {
+    60→  computeConsensus,
+    61→  buildTechnicalLayer,
+    62→  buildOrderbookLayer,
+    63→  buildOnchainLayer,
+    64→  shouldAlert,
+    65→  type AlertThresholds,
+    66→  type OnchainTrend as ConsensusOnchainTrend,
+    67→} from '@/lib/analysis/consensus';
+    68→import { volTargetSize } from '@/lib/risk/vol_targeting';
+    69→import { computeIndicators } from '@/lib/market/indicators';
+    70→import {
+    71→  getKlines,
+    72→  getOrderBook,
+    73→  getFundingRate,
+    74→  getTicker24h,
+    75→} from '@/lib/market/binance';
+    76→import {
+    77→  getOnChainStats,
+    78→  getHashrateHistory,
+    79→} from '@/lib/market/onchain';
+    80→import {
+    81→  completeWithAutoFallback,
+    82→  resolveModel,
+    83→  type ResolvedModel,
+    84→} from '@/lib/llm/router';
+    85→import { CRYPTO_TECHNICAL_SYSTEM } from '@/lib/llm/prompts';
+    86→import { sendSignalAlert } from '@/lib/alerts/telegram';
+    87→import {
+    88→  getSetting,
+    89→  setSetting,
+    90→  SETTING_KEYS,
+    91→} from '@/lib/config/settings';
+    92→import type {
+    93→  Kline,
+    94→  OrderBook,
+    95→  Ticker,
+    96→  LayerScore,
+    97→  Direction,
+    98→  AssetClass,
+    99→} from '@/lib/types';
+   100→
+   101→export const dynamic = 'force-dynamic';
+   102→export const maxDuration = 300;
+   103→
+   104→// ---------------------------------------------------------------------------
+   105→// Cron parsing — "*/N * * * *" → every N minutes
+   106→// ---------------------------------------------------------------------------
+   107→
+   108→function parseEveryNMin(cron: string): number | null {
+   109→  if (!cron) return null;
+   110→  const parts = cron.trim().split(/\s+/);
+   111→  if (parts.length !== 5) return null;
+   112→  const m = parts[0].match(/^\*\/(\d+)$/);
+   113→  if (!m) return null;
+   114→  // Other fields must be "*" (every).
+   115→  if (!parts.slice(1).every((p) => p === '*')) return null;
+   116→  const n = parseInt(m[1], 10);
+   117→  if (!Number.isFinite(n) || n <= 0) return null;
+   118→  return n;
+   119→}
+   120→
+   121→function isJobDue(cron: string, lastRunAt: Date | null): boolean {
+   122→  const n = parseEveryNMin(cron);
+   123→  if (n == null) return false;
+   124→  if (!lastRunAt) return true;
+   125→  const elapsedMin = (Date.now() - lastRunAt.getTime()) / 60_000;
+   126→  return elapsedMin >= n;
+   127→}
+   128→
+   129→// ---------------------------------------------------------------------------
+   130→// JSON safety — Pollinations (and most free providers) ignore response_format
+   131→// and occasionally wrap output in markdown fences. We strip and best-effort
+   132→// parse so a single bad token doesn't lose us the whole asset's analysis.
+   133→// ---------------------------------------------------------------------------
+   134→
+   135→function safeParseJson(text: string): Record<string, unknown> | null {
+   136→  if (!text) return null;
+   137→  let t = text.trim();
+   138→  // Strip ```json ... ``` fences.
+   139→  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+   140→  if (fence) t = fence[1].trim();
+   141→  // Find the first {...} block (LLMs sometimes prepend prose).
+   142→  const start = t.indexOf('{');
+   143→  const end = t.lastIndexOf('}');
+   144→  if (start !== -1 && end !== -1 && end > start) {
+   145→    t = t.slice(start, end + 1);
+   146→  }
+   147→  try {
+   148→    return JSON.parse(t) as Record<string, unknown>;
+   149→  } catch {
+   150→    return null;
+   151→  }
+   152→}
+   153→
+   154→// ---------------------------------------------------------------------------
+   155→// Prompt builders (compact — free-tier RPM is the binding constraint)
+   156→// ---------------------------------------------------------------------------
+   157→
+   158→function buildTriagePrompt(
+   159→  symbol: string,
+   160→  ti: ReturnType<typeof computeIndicators>,
+   161→  ob: OrderBook,
+   162→  fundingRate: number,
+   163→  ticker: Ticker,
+   164→  consensusScore: number,
+   165→): string {
+   166→  return [
+   167→    `Symbol: ${symbol}`,
+   168→    `Price: ${ti.lastClose ?? ticker.lastPrice}  24h%: ${ticker.priceChangePercent?.toFixed(2)}`,
+   169→    `Trend: ${ti.trend}  SummaryScore: ${consensusScore}`,
+   170→    `RSI14: ${ti.rsi14?.toFixed(1)}  MACD-hist: ${ti.macd?.histogram?.toFixed(3)}`,
+   171→    `EMA12/26: ${ti.ema12?.toFixed(2)}/${ti.ema26?.toFixed(2)}  ATR%: ${(((ti.atr14 ?? 0) / (ti.lastClose ?? 1)) * 100).toFixed(2)}`,
+   172→    `Funding: ${(fundingRate * 100).toFixed(4)}%`,
+   173→    `OB: bidVol/askVol in top 10`,
+   174→    `Return STRICT JSON {direction,conviction,entry,stopLoss,takeProfit,rationale,tags[]}.`,
+   175→  ].join('\n');
+   176→}
+   177→
+   178→function buildDeepPrompt(
+   179→  symbol: string,
+   180→  ti: ReturnType<typeof computeIndicators>,
+   181→  ob: OrderBook,
+   182→  fundingRate: number,
+   183→  ticker: Ticker,
+   184→  consensusScore: number,
+   185→): string {
+   186→  // Deep prompt includes bollinger + vwap + a richer OB read.
+   187→  const bidVol = ob.bids.slice(0, 10).reduce((s, l) => s + l.quantity, 0);
+   188→  const askVol = ob.asks.slice(0, 10).reduce((s, l) => s + l.quantity, 0);
+   189→  return [
+   190→    `Deep analysis — ${symbol}`,
+   191→    `Price: ${ti.lastClose ?? ticker.lastPrice}  24h%: ${ticker.priceChangePercent?.toFixed(2)}  Vol: ${ticker.quoteVolume}`,
+   192→    `Trend: ${ti.trend}  DetScore: ${consensusScore}`,
+   193→    `RSI14: ${ti.rsi14?.toFixed(1)}  MACD: ${ti.macd?.macd?.toFixed(3)}/${ti.macd?.signal?.toFixed(3)} (hist ${ti.macd?.histogram?.toFixed(3)})`,
+   194→    `EMA12/26: ${ti.ema12?.toFixed(2)}/${ti.ema26?.toFixed(2)}  SMA20: ${ti.sma20?.toFixed(2)}`,
+   195→    `Bollinger: u=${ti.bollinger.upper?.toFixed(2)} m=${ti.bollinger.middle?.toFixed(2)} l=${ti.bollinger.lower?.toFixed(2)}`,
+   196→    `VWAP: ${ti.vwap?.toFixed(2)}  ATR14: ${ti.atr14?.toFixed(2)}`,
+   197→    `Funding: ${(fundingRate * 100).toFixed(4)}%`,
+   198→    `OB top10: bidVol=${bidVol.toFixed(2)} askVol=${askVol.toFixed(2)} imbalance=${(bidVol - askVol).toFixed(2)}`,
+   199→    `Return STRICT JSON {direction,conviction,entry,stopLoss,takeProfit,rationale(<=280 chars),tags[]}.`,
+   200→  ].join('\n');
+   201→}
+   202→
+   203→// ---------------------------------------------------------------------------
+   204→// analyzeAsset — per-asset pipeline (the heart of the brain)
+   205→// ---------------------------------------------------------------------------
+   206→
+   207→interface AnalyzeAssetResult {
+   208→  symbol: string;
+   209→  direction: Direction;
+   210→  conviction: number;
+   211→  alerted: boolean;
+   212→  signalId?: string;
+   213→  action: 'skip' | 'cache' | 'analyze';
+   214→  tier: 0 | 1 | 2;
+   215→  reason: string;
+   216→  noteworthiness: number;
+   217→  regime: 'trending' | 'ranging' | 'volatile';
+   218→}
+   219→
+   220→async function analyzeAsset(
+   221→  asset: { id: string; symbol: string; assetClass: string; isActive: boolean },
+   222→  sendAlerts: boolean,
+   223→  thresholds: Record<string, AlertThresholds>,
+   224→  defaultThreshold: AlertThresholds,
+   225→  llmCfg: ResolvedModel | null,
+   226→  forceDeep = false,
+   227→  triggerSource: TriggerSource = 'scheduler',
+   228→): Promise<AnalyzeAssetResult> {
+   229→  const symbol = asset.symbol;
+   230→
+   231→  // 1. Parallel market-data fetch.
+   232→  const emptyOrderbook: OrderBook = { symbol, bids: [], asks: [], fetchedAt: Date.now() };
+   233→  const emptyTicker: Ticker = {
+   234→    symbol,
+   235→    lastPrice: 0,
+   236→    priceChange: 0,
+   237→    priceChangePercent: 0,
+   238→    high: 0,
+   239→    low: 0,
+   240→    volume: 0,
+   241→    quoteVolume: 0,
+   242→    fetchedAt: Date.now(),
+   243→  };
+   244→  const [klines, orderbook, fundingInfo, ticker] = await Promise.all([
+   245→    getKlines(symbol, '4h', 200).catch((e) => {
+   246→      console.warn(`[tick] klines failed for ${symbol}:`, (e as Error).message);
+   247→      return [] as Kline[];
+   248→    }),
+   249→    getOrderBook(symbol, 50).catch((e) => {
+   250→      console.warn(`[tick] orderbook failed for ${symbol}:`, (e as Error).message);
+   251→      return emptyOrderbook;
+   252→    }),
+   253→    getFundingRate(symbol).catch(() => null),
+   254→    getTicker24h(symbol).catch((e) => {
+   255→      console.warn(`[tick] ticker failed for ${symbol}:`, (e as Error).message);
+   256→      return emptyTicker;
+   257→    }),
+   258→  ]);
+   259→  const fundingRate = fundingInfo?.fundingRate ?? 0;
+   260→
+   261→  // 2. computeIndicators
+   262→  const ti = computeIndicators(klines);
+   263→
+   264→  // 3. Onchain trend (BTC only — best-effort).
+   265→  let onchainLayer: LayerScore | null = null;
+   266→  try {
+   267→    // Ensure cache is fresh + ring buffer populated.
+   268→    await getOnChainStats();
+   269→    const history = getHashrateHistory();
+   270→    if (history.length >= 3) {
+   271→      const trendForLayer: ConsensusOnchainTrend = {
+   272→        asset: 'BTC',
+   273→        samples: history,
+   274→        current: history[history.length - 1],
+   275→      };
+   276→      onchainLayer = buildOnchainLayer(trendForLayer, symbol);
+   277→    }
+   278→  } catch {
+   279→    /* ignore — onchain is best-effort */
+   280→  }
+   281→
+   282→  // 4. Deterministic consensus (no LLM layer).
+   283→  const technicalLayer = buildTechnicalLayer(ti);
+   284→  const orderbookLayer = buildOrderbookLayer(orderbook);
+   285→  const detConsensus = computeConsensus({
+   286→    symbol,
+   287→    assetClass: asset.assetClass as AssetClass,
+   288→    technical: technicalLayer,
+   289→    orderbook: orderbookLayer,
+   290→    onchain: onchainLayer,
+   291→  });
+   292→
+   293→  // 5. Gate decision.
+   294→  let decision = gateDecide({
+   295→    symbol,
+   296→    ti,
+   297→    ob: orderbook,
+   298→    fundingRate,
+   299→    ticker,
+   300→    consensus: detConsensus,
+   301→    forceRun: forceDeep ? triggerSource : null,
+   302→  });
+   303→
+   304→  // Force-deep overrides the gate to analyze+tier2 (bypasses YAGNI/cache/cadence
+   305→  // but NOT budget — gateDecide already short-circuits on budget-exhausted).
+   306→  if (forceDeep && decision.action !== 'skip') {
+   307→    decision = {
+   308→      ...decision,
+   309→      action: 'analyze',
+   310→      tier: 2,
+   311→      reason: `force-deep:${triggerSource}`,
+   312→    };
+   313→  } else if (forceDeep && decision.action === 'skip' && decision.reason === 'budget-exhausted') {
+   314→    // Budget exhausted — keep the skip, but log the force attempt.
+   315→    decision = { ...decision, reason: `force-deep-blocked:${decision.reason}` };
+   316→  }
+   317→
+   318→  // 6. LLM call (if eligible).
+   319→  const canCallLlm = !!(llmCfg && (forceDeep || isRunning()));
+   320→  let llmLayer: LayerScore | null = null;
+   321→
+   322→  if (canCallLlm && decision.action === 'analyze') {
+   323→    // Global circuit-breaker: skip when in cooldown, unless force-deep.
+   324→    if (llmInCooldown() && !forceDeep) {
+   325→      decision = {
+   326→        ...decision,
+   327→        action: 'skip',
+   328→        tier: 0,
+   329→        reason: 'llm-cooldown',
+   330→      };
+   331→    } else {
+   332→      try {
+   333→        const tier = decision.tier;
+   334→        const prompt =
+   335→          tier === 2
+   336→            ? buildDeepPrompt(symbol, ti, orderbook, fundingRate, ticker, detConsensus.summaryScore)
+   337→            : buildTriagePrompt(symbol, ti, orderbook, fundingRate, ticker, detConsensus.summaryScore);
+   338→
+   339→        const response = await completeWithAutoFallback({
+   340→          messages: [
+   341→            { role: 'system', content: CRYPTO_TECHNICAL_SYSTEM },
+   342→            { role: 'user', content: prompt },
+   343→          ],
+   344→          moduleKey: 'crypto_technical',
+   345→          layer: tier === 2 ? 'deep' : 'triage',
+   346→          temperature: llmCfg?.temperature ?? 0.3,
+   347→        });
+   348→
+   349→        const parsed = safeParseJson(response.text);
+   350→        if (parsed && typeof parsed.direction === 'string') {
+   351→          const dir = parsed.direction as Direction;
+   352→          const conv = typeof parsed.conviction === 'number'
+   353→            ? Math.max(0, Math.min(100, parsed.conviction))
+   354→            : 50;
+   355→          llmLayer = {
+   356→            layer: 'llm',
+   357→            direction: dir,
+   358→            score: dir === 'long' ? 50 : dir === 'short' ? -50 : 0,
+   359→            confidence: conv / 100,
+   360→            rationale: typeof parsed.rationale === 'string' ? parsed.rationale : 'LLM analysis',
+   361→            weight: 0.2,
+   362→          };
+   363→          recordLlmCall(response.usage?.totalTokens ?? 1000);
+   364→          recordLlmSuccess();
+   365→        } else {
+   366→          // Got a response but couldn't parse — treat as a soft failure.
+   367→          recordLlmFailure();
+   368→        }
+   369→      } catch (e) {
+   370→        console.warn(`[tick] LLM failed for ${symbol}:`, (e as Error).message);
+   371→        recordLlmFailure();
+   372→        // Decision stays as 'analyze' — the final consensus just won't include
+   373→        // the llm layer, which is exactly the safe fallback.
+   374→      }
+   375→    }
+   376→  }
+   377→
+   378→  // 7. Final consensus (with llmLayer if we got one).
+   379→  const finalConsensus = computeConsensus(
+   380→    {
+   381→      symbol,
+   382→      assetClass: asset.assetClass as AssetClass,
+   383→      technical: technicalLayer,
+   384→      orderbook: orderbookLayer,
+   385→      onchain: onchainLayer,
+   386→    },
+   387→    llmLayer,
+   388→  );
+   389→
+   390→  // 8. Update watch cache.
+   391→  setWatch({
+   392→    symbol,
+   393→    lastAnalyzedAt: decision.action === 'analyze' ? Date.now() : 0,
+   394→    lastDataSig: decision.dataSig,
+   395→    lastVerdict: finalConsensus.direction,
+   396→    lastNoteworthiness: decision.noteworthiness,
+   397→    regime: decision.regime,
+   398→    action: decision.action,
+   399→    updatedAt: Date.now(),
+   400→  });
+   401→
+   402→  // 9. Vol-target sizing (E1) + trigger tag stamp into rationale.
+   403→  // 4h bars → 6 bars/day → 6 × 365 = 2190 bars/year.
+   404→  const volTarget = volTargetSize(10000, klines, { barsPerYear: 365 * 6 });
+   405→  const triggerTag = `[trigger:${triggerSource}]`;
+   406→  const volTag = `[${volTarget.rationale}]`;
+   407→  const stampedRationale = `${triggerTag} ${volTag}\n${finalConsensus.rationale ?? ''}`;
+   408→
+   409→  // Compute entry/stop/take from ATR if not already set by the consensus.
+   410→  const lastClose = ti.lastClose ?? ticker.lastPrice ?? null;
+   411→  const atr = ti.atr14 ?? 0;
+   412→  let entryPrice: number | null = finalConsensus.entryPrice ?? lastClose;
+   413→  let stopLoss: number | null = finalConsensus.stopLoss ?? null;
+   414→  let takeProfit: number | null = finalConsensus.takeProfit ?? null;
+   415→  if (entryPrice && atr > 0 && finalConsensus.direction !== 'neutral') {
+   416→    if (stopLoss == null) {
+   417→      stopLoss = finalConsensus.direction === 'long'
+   418→        ? entryPrice - 1.5 * atr
+   419→        : entryPrice + 1.5 * atr;
+   420→    }
+   421→    if (takeProfit == null) {
+   422→      takeProfit = finalConsensus.direction === 'long'
+   423→        ? entryPrice + 2 * atr
+   424→        : entryPrice - 2 * atr;
+   425→    }
+   426→  }
+   427→
+   428→  // 10. db.signal.create.
+   429→  let signalId: string | undefined;
+   430→  try {
+   431→    const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4h horizon
+   432→    const sig = await db.signal.create({
+   433→      data: {
+   434→        assetId: asset.id,
+   435→        direction: finalConsensus.direction,
+   436→        conviction: finalConsensus.conviction,
+   437→        timeframe: '4h',
+   438→        layersSummary: JSON.stringify(
+   439→          finalConsensus.layers.map((l) => ({
+   440→            layer: l.layer,
+   441→            direction: l.direction,
+   442→            score: l.score,
+   443→            confidence: l.confidence,
+   444→          })),
+   445→        ),
+   446→        modelsUsed: JSON.stringify(llmLayer ? ['llm'] : ['deterministic']),
+   447→        entryPrice,
+   448→        stopLoss,
+   449→        takeProfit,
+   450→        rationale: stampedRationale,
+   451→        status: 'open',
+   452→        expiresAt,
+   453→      },
+   454→    });
+   455→    signalId = sig.id;
+   456→  } catch (e) {
+   457→    console.error(`[tick] signal.create failed for ${symbol}:`, (e as Error).message);
+   458→  }
+   459→
+   460→  // 11. Alert if shouldAlert.
+   461→  let alerted = false;
+   462→  if (sendAlerts && signalId) {
+   463→    const perAsset = (thresholds && thresholds[symbol]) || {};
+   464→    const alertThresholds: AlertThresholds = { ...defaultThreshold, ...perAsset };
+   465→    if (shouldAlert(finalConsensus, alertThresholds)) {
+   466→      try {
+   467→        const ok = await sendSignalAlert(finalConsensus);
+   468→        if (ok) {
+   469→          alerted = true;
+   470→          recordAlert();
+   471→        }
+   472→      } catch (e) {
+   473→        console.warn(`[tick] alert send failed for ${symbol}:`, (e as Error).message);
+   474→      }
+   475→    }
+   476→  }
+   477→
+   478→  // 12. recordAction.
+   479→  recordAction({
+   480→    symbol,
+   481→    action: alerted ? 'alert' : decision.action,
+   482→    reason: decision.reason,
+   483→    tier: decision.tier,
+   484→    source: triggerSource,
+   485→  });
+   486→
+   487→  return {
+   488→    symbol,
+   489→    direction: finalConsensus.direction,
+   490→    conviction: finalConsensus.conviction,
+   491→    alerted,
+   492→    signalId,
+   493→    action: decision.action,
+   494→    tier: decision.tier,
+   495→    reason: decision.reason,
+   496→    noteworthiness: decision.noteworthiness,
+   497→    regime: decision.regime,
+   498→  };
+   499→}
+   500→
+   501→// ---------------------------------------------------------------------------
+   502→// runForcedAnalysis — drain the force-run queue. Works even when brain paused.
+   503→// ---------------------------------------------------------------------------
+   504→
+   505→async function runForcedAnalysis(sendAlerts: boolean): Promise<AnalyzeAssetResult[]> {
+   506→  const queue = consumeForceRunQueue();
+   507→  const out: AnalyzeAssetResult[] = [];
+   508→  if (queue.size === 0) return out;
+   509→
+   510→  const thresholds = (await getSetting<Record<string, AlertThresholds>>(SETTING_KEYS.alertThresholds, {})) ?? {};
+   511→  const defaultThreshold = (await getSetting<AlertThresholds>(SETTING_KEYS.defaultThreshold, {})) ?? {};
+   512→  const llmCfg = await resolveModel('crypto_technical', 'primary').catch(() => null);
+   513→
+   514→  for (const [symbol, source] of queue.entries()) {
+   515→    try {
+   516→      const asset = await db.asset.findUnique({ where: { symbol } });
+   517→      if (!asset || !asset.isActive) {
+   518→        out.push({
+   519→          symbol,
+   520→          direction: 'neutral',
+   521→          conviction: 0,
+   522→          alerted: false,
+   523→          action: 'skip',
+   524→          tier: 0,
+   525→          reason: 'asset-not-found',
+   526→          noteworthiness: 0,
+   527→          regime: 'ranging',
+   528→        });
+   529→        continue;
+   530→      }
+   531→      const result = await analyzeAsset(
+   532→        asset,
+   533→        sendAlerts,
+   534→        thresholds,
+   535→        defaultThreshold,
+   536→        llmCfg,
+   537→        true,
+   538→        source,
+   539→      );
+   540→      out.push(result);
+   541→    } catch (e) {
+   542→      console.error(`[tick] forced analysis failed for ${symbol}:`, (e as Error).message);
+   543→      out.push({
+   544→        symbol,
+   545→        direction: 'neutral',
+   546→        conviction: 0,
+   547→        alerted: false,
+   548→        action: 'skip',
+   549→        tier: 0,
+   550→        reason: `error:${(e as Error).message}`,
+   551→        noteworthiness: 0,
+   552→        regime: 'ranging',
+   553→      });
+   554→    }
+   555→  }
+   556→  return out;
+   557→}
+   558→
+   559→// ---------------------------------------------------------------------------
+   560→// runCryptoScan — for each active crypto asset, run analyzeAsset with the
+   561→// scheduled trigger source. Honors brain running flag (no LLM if paused).
+   562→// ---------------------------------------------------------------------------
+   563→
+   564→async function runCryptoScan(sendAlerts: boolean): Promise<AnalyzeAssetResult[]> {
+   565→  const assets = await db.asset.findMany({
+   566→    where: { assetClass: 'crypto', isActive: true },
+   567→    take: 100,
+   568→  });
+   569→
+   570→  const thresholds = (await getSetting<Record<string, AlertThresholds>>(SETTING_KEYS.alertThresholds, {})) ?? {};
+   571→  const defaultThreshold = (await getSetting<AlertThresholds>(SETTING_KEYS.defaultThreshold, {})) ?? {};
+   572→  const llmCfg = await resolveModel('crypto_technical', 'primary').catch(() => null);
+   573→
+   574→  const out: AnalyzeAssetResult[] = [];
+   575→  for (const asset of assets) {
+   576→    try {
+   577→      const result = await analyzeAsset(
+   578→        asset,
+   579→        sendAlerts,
+   580→        thresholds,
+   581→        defaultThreshold,
+   582→        llmCfg,
+   583→        false,
+   584→        'scheduler',
+   585→      );
+   586→      out.push(result);
+   587→    } catch (e) {
+   588→      console.error(`[tick] scan failed for ${asset.symbol}:`, (e as Error).message);
+   589→      out.push({
+   590→        symbol: asset.symbol,
+   591→        direction: 'neutral',
+   592→        conviction: 0,
+   593→        alerted: false,
+   594→        action: 'skip',
+   595→        tier: 0,
+   596→        reason: `error:${(e as Error).message}`,
+   597→        noteworthiness: 0,
+   598→        regime: 'ranging',
+   599→      });
+   600→    }
+   601→  }
+   602→  return out;
+   603→}
+   604→
+   605→// ---------------------------------------------------------------------------
+   606→// findDueJobs + markJobRun
+   607→// ---------------------------------------------------------------------------
+   608→
+   609→async function findDueJobs(): Promise<{ id: string; moduleKey: string; cronExpr: string }[]> {
+   610→  let jobs: { id: string; moduleKey: string; cronExpr: string; lastRunAt: Date | null }[] = [];
+   611→  try {
+   612→    jobs = await db.scheduleJob.findMany({
+   613→      where: { enabled: true },
+   614→    });
+   615→  } catch (err) {
+   616→    console.error('[tick] scheduleJob query failed:', (err as Error).message);
+   617→    return [];
+   618→  }
+   619→  return jobs.filter((j) => isJobDue(j.cronExpr, j.lastRunAt));
+   620→}
+   621→
+   622→async function markJobRun(jobId: string, status: string, error?: string): Promise<void> {
+   623→  try {
+   624→    await db.scheduleJob.update({
+   625→      where: { id: jobId },
+   626→      data: {
+   627→        lastRunAt: new Date(),
+   628→        lastStatus: status,
+   629→        lastError: error ?? null,
+   630→      },
+   631→    });
+   632→  } catch (e) {
+   633→    console.error('[tick] markJobRun failed:', (e as Error).message);
+   634→  }
+   635→}
+   636→
+   637→// ---------------------------------------------------------------------------
+   638→// GET — ScheduleJob list + lastSchedulerTick
+   639→// ---------------------------------------------------------------------------
+   640→
+   641→export async function GET() {
+   642→  try {
+   643→    const jobs = await db.scheduleJob.findMany({ orderBy: { moduleKey: 'asc' } });
+   644→    const lastTick = await getSetting<string>(SETTING_KEYS.lastSchedulerTick);
+   645→    return NextResponse.json({
+   646→      success: true,
+   647→      data: {
+   648→        jobs,
+   649→        lastSchedulerTick: lastTick ?? null,
+   650→        running: snapshot().running,
+   651→      },
+   652→    });
+   653→  } catch (err) {
+   654→    return NextResponse.json(
+   655→      { success: false, error: (err as Error).message },
+   656→      { status: 500 },
+   657→    );
+   658→  }
+   659→}
+   660→
+   661→// ---------------------------------------------------------------------------
+   662→// POST — the main tick loop
+   663→// ---------------------------------------------------------------------------
+   664→
+   665→export async function POST() {
+   666→  const tickStartTs = Date.now();
+   667→  const result: {
+   668→    ran: boolean;
+   669→    skipped: boolean;
+   670→    grading: Awaited<ReturnType<typeof gradeExpiredSignals>> | null;
+   671→    priceAlerts: Awaited<ReturnType<typeof checkPriceAlerts>> | null;
+   672→    forced: AnalyzeAssetResult[];
+   673→    triggers: ReturnType<typeof checkCrossAssetTriggers> | null;
+   674→    newsTriggers: Awaited<ReturnType<typeof checkNewsTriggers>> | null;
+   675→    tune: Awaited<ReturnType<typeof selfTune>> | null;
+   676→    sync: unknown;
+   677→    scan?: AnalyzeAssetResult[];
+   678→    durationMs: number;
+   679→  } = {
+   680→    ran: false,
+   681→    skipped: false,
+   682→    grading: null,
+   683→    priceAlerts: null,
+   684→    forced: [],
+   685→    triggers: null,
+   686→    newsTriggers: null,
+   687→    tune: null,
+   688→    sync: null,
+   689→    durationMs: 0,
+   690→  };
+   691→
+   692→  // 1. hydrate + tickStarted.
+   693→  try {
+   694→    await hydrate();
+   695→  } catch (e) {
+   696→    console.warn('[tick] hydrate failed:', (e as Error).message);
+   697→  }
+   698→  tickStarted();
+   699→
+   700→  // 2. gradeExpiredSignals (best-effort).
+   701→  try {
+   702→    result.grading = await gradeExpiredSignals();
+   703→  } catch (e) {
+   704→    console.error('[tick] grading failed:', (e as Error).message);
+   705→  }
+   706→
+   707→  // 3. checkPriceAlerts (best-effort).
+   708→  try {
+   709→    result.priceAlerts = await checkPriceAlerts();
+   710→  } catch (e) {
+   711→    console.error('[tick] price alerts failed:', (e as Error).message);
+   712→  }
+   713→
+   714→  // 4. runForcedAnalysis — drain the queue. Works even when brain paused.
+   715→  try {
+   716→    const forced = await runForcedAnalysis(true);
+   717→    result.forced.push(...forced);
+   718→  } catch (e) {
+   719→    console.error('[tick] forced analysis failed:', (e as Error).message);
+   720→  }
+   721→
+   722→  // 5. checkNewsTriggers — every-tick RSS scan (5-min cache). If triggered,
+   723→  //    it queues assets via forceRun — drain those immediately.
+   724→  try {
+   725→    result.newsTriggers = await checkNewsTriggers();
+   726→    if (result.newsTriggers?.triggered) {
+   727→      const newsForced = await runForcedAnalysis(true);
+   728→      result.forced.push(...newsForced);
+   729→    }
+   730→  } catch (e) {
+   731→    console.error('[tick] news triggers failed:', (e as Error).message);
+   732→  }
+   733→
+   734→  // 6. Find due ScheduleJobs. If none → record sample + end + return skipped.
+   735→  let dueJobs: { id: string; moduleKey: string; cronExpr: string }[] = [];
+   736→  try {
+   737→    dueJobs = await findDueJobs();
+   738→  } catch (e) {
+   739→    console.error('[tick] findDueJobs failed:', (e as Error).message);
+   740→  }
+   741→
+   742→  if (dueJobs.length === 0) {
+   743→    recordSample();
+   744→    tickEnded();
+   745→    result.skipped = true;
+   746→    result.durationMs = Date.now() - tickStartTs;
+   747→    // Persist last-tick timestamp (best-effort).
+   748→    try {
+   749→      await setSetting(SETTING_KEYS.lastSchedulerTick, new Date().toISOString());
+   750→    } catch {
+   751→      /* ignore */
+   752→    }
+   753→    return NextResponse.json({ success: true, data: result });
+   754→  }
+   755→
+   756→  // 7. For each due job, dispatch by moduleKey. crypto_technical → runCryptoScan.
+   757→  for (const job of dueJobs) {
+   758→    try {
+   759→      if (job.moduleKey === 'crypto_technical') {
+   760→        const scanResults = await runCryptoScan(true);
+   761→        result.scan = scanResults;
+   762→      }
+   763→      // Other moduleKeys can be added here as the app grows.
+   764→      await markJobRun(job.id, 'ok');
+   765→    } catch (e) {
+   766→      console.error(`[tick] job ${job.moduleKey} failed:`, (e as Error).message);
+   767→      await markJobRun(job.id, 'error', (e as Error).message);
+   768→    }
+   769→  }
+   770→  result.ran = true;
+   771→
+   772→  // 8. checkCrossAssetTriggers — BTC/ETH volatile → queue correlated alts.
+   773→  //    If triggered, drain the newly-queued force runs.
+   774→  try {
+   775→    result.triggers = checkCrossAssetTriggers();
+   776→    if (result.triggers?.triggered) {
+   777→      const crossForced = await runForcedAnalysis(true);
+   778→      result.forced.push(...crossForced);
+   779→    }
+   780→  } catch (e) {
+   781→    console.error('[tick] cross-asset triggers failed:', (e as Error).message);
+   782→  }
+   783→
+   784→  // 9. selfTune (best-effort).
+   785→  try {
+   786→    result.tune = await selfTune();
+   787→  } catch (e) {
+   788→    console.error('[tick] self-tune failed:', (e as Error).message);
+   789→  }
+   790→
+   791→  // 10. Supabase sync (best-effort, dynamic import — module may not exist).
+   792→  try {
+   793→    const supabase = await import('@/lib/supabase/sync').catch(() => null);
+   794→    if (supabase && typeof (supabase as any).syncToSupabase === 'function') {
+   795→      result.sync = await (supabase as any).syncToSupabase();
+   796→    }
+   797→  } catch (e) {
+   798→    console.warn('[tick] supabase sync skipped:', (e as Error).message);
+   799→  }
+   800→
+   801→  // 11. recordSample + tickEnded.
+   802→  recordSample();
+   803→  tickEnded();
+   804→  result.durationMs = Date.now() - tickStartTs;
+   805→
+   806→  // Persist last-tick timestamp (best-effort).
+   807→  try {
+   808→    await setSetting(SETTING_KEYS.lastSchedulerTick, new Date().toISOString());
+   809→  } catch {
+   810→    /* ignore */
+   811→  }
+   812→
+   813→  // 12. Return.
+   814→  return NextResponse.json({ success: true, data: result });
+   815→}
+   816→
