@@ -16,7 +16,7 @@
 // the grades already exist, we're just reading them.
 
 import { db } from '@/lib/db';
-import { getConfig, setConfig, getMode, isRunning, recordAction, type BrainConfig } from '@/lib/brain/state';
+import { getConfig, setConfig, getMode, isRunning, recordAction, recordTuneEvent, type BrainConfig } from '@/lib/brain/state';
 
 // Safe bounds for each tunable. The brain can't push a threshold outside these
 // no matter what the feedback says — prevents a bad sample from wrecking the gate.
@@ -115,6 +115,19 @@ export async function selfTune(): Promise<TuneResult> {
     reason: reasons.join('; '),
     conviction: Math.round(winRate * 100),
   });
+  // Record each nudge in the tune history so operators can see the brain
+  // learning over time (powers the self-tune history chart).
+  for (const [field, to] of Object.entries(patch)) {
+    const from = (before as any)[field];
+    if (typeof to === 'number' && from !== to) {
+      recordTuneEvent({
+        field: field as 'unanimousConviction' | 'minNoteworthiness' | 'highNoteworthiness',
+        from, to, reason: reasons.join('; '),
+        winRate: Math.round(winRate * 100),
+        sampleSize: recent.length,
+      });
+    }
+  }
 
   return { tuned: true, reason: reasons.join('; '), before, after: patch, sampleSize: recent.length, winRate };
 }

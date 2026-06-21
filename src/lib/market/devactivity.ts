@@ -53,33 +53,43 @@ export interface RepoActivity {
   repo: string;
   stars: number;
   commits7d: number;
+  commitsPrev7d: number; // previous week — for the delta trend
+  deltaPct: number; // (this - prev) / max(prev, 1) * 100
   lastPush: string | null; // ISO
 }
 
 /**
- * Fetch dev activity for the flagship repos. Each repo needs 2 calls (repo info
- * + recent commits), fired in parallel per repo. Returns what it can — partial
- * data is more useful than none, and each repo degrades independently.
+ * Fetch dev activity for the flagship repos. Each repo needs 3 calls (repo info
+ * + this-week commits + last-week commits), fired in parallel per repo. The
+ * delta (this vs last week) is a genuine trend signal — rising dev activity =
+ * accelerating development. Returns what it can; each repo degrades independently.
  */
 export async function getDevActivity(): Promise<RepoActivity[]> {
   const cachedArr = cached<RepoActivity[]>('devactivity');
   if (cachedArr) return cachedArr;
 
-  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const now = Date.now();
+  const sinceThis = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sincePrev = new Date(now - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const untilPrev = sinceThis; // last week ends where this week begins
   const results = await Promise.allSettled(
     REPOS.map(async (r): Promise<RepoActivity> => {
-      const [info, commits] = await Promise.all([
+      const [info, commitsThis, commitsPrev] = await Promise.all([
         getJson(`https://api.github.com/repos/${r.repo}`),
-        // per_page=100 is enough for a week of any healthy repo; if there are
-        // more, we cap at 100 (the count is still a strong signal).
-        getJson(`https://api.github.com/repos/${r.repo}/commits?since=${since}&per_page=100`),
+        getJson(`https://api.github.com/repos/${r.repo}/commits?since=${sinceThis}&per_page=100`),
+        getJson(`https://api.github.com/repos/${r.repo}/commits?since=${sincePrev}&until=${untilPrev}&per_page=100`),
       ]);
+      const this7 = Array.isArray(commitsThis) ? commitsThis.length : 0;
+      const prev7 = Array.isArray(commitsPrev) ? commitsPrev.length : 0;
+      const deltaPct = prev7 > 0 ? ((this7 - prev7) / prev7) * 100 : this7 > 0 ? 100 : 0;
       return {
         asset: r.asset,
         label: r.label,
         repo: r.repo,
         stars: info.stargazers_count ?? 0,
-        commits7d: Array.isArray(commits) ? commits.length : 0,
+        commits7d: this7,
+        commitsPrev7d: prev7,
+        deltaPct: Math.round(deltaPct),
         lastPush: info.pushed_at ?? null,
       };
     }),

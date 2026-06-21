@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 interface TrendingCoin { rank: number; coinId: string; symbol: string; name: string; marketCapRank: number | null; priceBtc: number; score: number; }
 interface FearGreed { value: number; classification: string; timestamp: number; }
 interface OnChainStats { txCount24h: number; hashRate: number; difficulty: number; fetchedAt: number; }
-interface RepoActivity { asset: string; label: string; repo: string; stars: number; commits7d: number; lastPush: string | null; }
+interface RepoActivity { asset: string; label: string; repo: string; stars: number; commits7d: number; commitsPrev7d: number; deltaPct: number; lastPush: string | null; }
 
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url, { cache: 'no-store' });
@@ -168,16 +168,24 @@ export function FreeSignalsCard() {
           ) : (
             <ScrollArea className="h-[170px]">
               <div className="space-y-0.5 pr-2">
-                {dev.map((r) => (
-                  <div key={r.repo} className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-muted/30 transition-colors">
-                    <span className="text-xs font-bold w-8 shrink-0">{r.asset}</span>
-                    <span className="text-[10px] text-muted-foreground flex-1 truncate">{r.label}</span>
-                    <Badge variant="outline" className={cn('text-[9px] py-0', r.commits7d > 30 ? 'text-emerald-400 border-emerald-500/30' : r.commits7d > 10 ? 'text-amber-400' : 'text-muted-foreground')}>
-                      {r.commits7d}c
-                    </Badge>
-                  </div>
-                ))}
-                <div className="text-[9px] text-muted-foreground/60 pt-1.5 text-center">commits / 7d</div>
+                {dev.map((r) => {
+                  // Delta trend: this week vs last week. ↑ green, ↓ red, = muted.
+                  const deltaUp = r.deltaPct > 5;
+                  const deltaDown = r.deltaPct < -5;
+                  const deltaColor = deltaUp ? 'text-emerald-400' : deltaDown ? 'text-rose-400' : 'text-muted-foreground';
+                  const deltaArrow = deltaUp ? '↑' : deltaDown ? '↓' : '→';
+                  return (
+                    <div key={r.repo} className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-muted/30 transition-colors" title={`${r.commits7d} this week vs ${r.commitsPrev7d} last week`}>
+                      <span className="text-xs font-bold w-8 shrink-0">{r.asset}</span>
+                      <span className="text-[10px] text-muted-foreground flex-1 truncate">{r.label}</span>
+                      <Badge variant="outline" className={cn('text-[9px] py-0', r.commits7d > 30 ? 'text-emerald-400 border-emerald-500/30' : r.commits7d > 10 ? 'text-amber-400' : 'text-muted-foreground')}>
+                        {r.commits7d}c
+                      </Badge>
+                      <span className={cn('text-[9px] font-bold tabular-nums w-8 text-right', deltaColor)}>{deltaArrow}{Math.abs(r.deltaPct)}%</span>
+                    </div>
+                  );
+                })}
+                <div className="text-[9px] text-muted-foreground/60 pt-1.5 text-center">commits / 7d · vs last week</div>
               </div>
             </ScrollArea>
           )}

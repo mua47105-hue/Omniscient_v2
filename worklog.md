@@ -295,3 +295,29 @@ Task: QA + dashboard visual cohesion + FreeSignalsCard freshness timestamps + gl
 - Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
 - News/cross-asset triggers will fire + count when conditions are met.
 - Next cron could: (a) self-tune history mini-chart, (b) wire on-chain hashrate-trend as a consensus fundamental, (c) move news triggers to every-tick (60s) with a 5-min RSS cache, (d) dev-activity delta (this week vs last week commits), (e) refine the banner gradient to "more defined color blocks" (VLM's only remaining nit).
+
+---
+Task ID: 9
+Agent: main (15-min cron review #7)
+Task: QA + watch-list action icons + dev-activity delta trend + self-tune history chart.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 82/86 ticks ok — lastErr: none). Brain running, auto mode, 9 ticks, 1 LLM call, 9 skips (8 budget-skips), 11 assets watched. Lint clean, no runtime errors. All 9 pages render 200.
+- QA via agent-browser + VLM: VLM flagged the watch list as "lacks per-asset activity context" — only words, no icons. totalGraded still 0 (signals need 24h).
+
+## Completed modifications
+1. **Watch-list action icons** (`src/components/brain/BrainPanel.tsx`): `actionIcon()` helper maps each brain action to a color-coded lucide icon — analyze=Zap(sky), cache=DatabaseZap(violet), skip=Eye(muted), paused=Ban(rose), watch=Activity(amber). Each watch row now leads with the icon in a rounded chip, so the brain's per-asset activity is instantly clear at a glance. VLM: 7/10 → 9/10 ("significantly clarify the brain's per-asset activity").
+2. **Dev-activity delta trend** (`src/lib/market/devactivity.ts` + FreeSignalsCard): the client now fetches this-week AND last-week commits (3 GitHub calls per repo) and computes `deltaPct`. The FreeSignalsCard dev-activity column shows a ↑/↓/→ trend badge with the % change (emerald up, rose down, muted flat) + a tooltip "X this week vs Y last week". Header now "commits / 7d · vs last week". Adds genuine trend info — rising dev activity = accelerating development.
+3. **Self-tune history chart** (`src/lib/brain/state.ts` TuneEvent ring buffer + `recordTuneEvent()` + BrainPanel card): new `tuneEvents` array (capped 50) records each threshold nudge with field/from→to/reason/winRate/sampleSize. The selftune module calls `recordTuneEvent` for each adjusted threshold. New "Self-Tune History" card on the brain page shows the timeline of threshold evolution (violet rows) with an empty-state explaining it activates after 24h when grades accrue. Exposed in the brain snapshot.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 82/86 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: watch list renders with action-icon chips; Self-Tune History card renders with "No threshold nudges yet" placeholder (correct — needs 24h grades); dev-activity column renders (Unavailable during GitHub rate-limit, will recover).
+- tuneEvents in brain snapshot: 0 (expected).
+- VLM: watch list 9/10 ("action icons significantly clarify per-asset activity, well-organized row structure").
+- NOTE: GitHub dev-activity API hit the 60/hr anonymous rate limit during testing (3 calls/repo × 5 repos = 15 calls, plus earlier tests). The 30-min cache + the limit reset will restore it. On a residential/HF-Spaces host with a GitHub token (optional) this won't happen.
+
+## Unresolved / next-phase recommendations
+- Self-tuning + self-tune history are wired but data-starved (need 24h for first grades). They'll activate + populate autonomously.
+- Dev-activity delta is computed but GitHub rate-limits anonymous use. Could add an optional GitHub token in Settings to raise to 5000/hr.
+- Next cron could: (a) wire on-chain hashrate-trend as a consensus fundamental layer, (b) move news triggers to every-tick (60s) with a 5-min RSS cache, (c) add hover tooltips on the watch-list action icons, (d) make the self-tune history a proper step-chart of threshold values over time, (e) add a "trigger stats" breakdown chart (news vs cross-asset vs manual over time).

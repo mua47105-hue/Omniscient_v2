@@ -75,6 +75,18 @@ export interface StatsSample {
   skips: number;
 }
 
+/** A self-tuning nudge — records the threshold change + the reason. Powers the
+ *  self-tune history chart so operators can see the brain learning over time. */
+export interface TuneEvent {
+  ts: number;
+  field: 'unanimousConviction' | 'minNoteworthiness' | 'highNoteworthiness';
+  from: number;
+  to: number;
+  reason: string;
+  winRate: number;
+  sampleSize: number;
+}
+
 export interface BrainConfig {
   // Gate thresholds. Tuned for a free stack: be lazy by default, only spend
   // an LLM call when deterministic math is undecided OR something is happening.
@@ -126,10 +138,14 @@ interface BrainStateInternal {
   // Token-economy timeline samples — one per tick, ring-buffered (capped) so
   // the savings sparkline has history without unbounded memory growth.
   statsSamples: StatsSample[];
+  // Self-tune history — records each threshold nudge so operators can see the
+  // brain learning. Capped to avoid unbounded growth.
+  tuneEvents: TuneEvent[];
 }
 
 const g = globalThis as unknown as { __omniscientBrain?: BrainStateInternal };
 const MAX_SAMPLES = 120; // ~2h of 60s ticks — enough for a meaningful sparkline
+const MAX_TUNE_EVENTS = 50; // self-tune history cap
 
 function freshState(): BrainStateInternal {
   const now = Date.now();
@@ -145,6 +161,7 @@ function freshState(): BrainStateInternal {
     hydrated: false,
     forceRunQueue: new Map(),
     statsSamples: [],
+    tuneEvents: [],
   };
 }
 
@@ -156,6 +173,7 @@ function state(): BrainStateInternal {
   // guard here that checks BOTH existence AND the expected type.
   const s = g.__omniscientBrain;
   if (!s.statsSamples) s.statsSamples = [];
+  if (!s.tuneEvents) s.tuneEvents = [];
   if (!(s.forceRunQueue instanceof Map)) s.forceRunQueue = new Map();
   // Nested stats fields added later — backfill on the existing stats object
   // rather than resetting it (which would lose ticksTotal/tokensUsed).
@@ -361,6 +379,18 @@ export function recordTrigger(source: 'news' | 'cross-asset' | 'manual'): void {
   else if (source === 'cross-asset') s.stats.triggersCrossAsset++;
   else s.stats.triggersManual++;
 }
+
+/** Record a self-tuning threshold nudge — powers the self-tune history chart. */
+export function recordTuneEvent(e: Omit<TuneEvent, 'ts'>): void {
+  const s = state();
+  s.tuneEvents.push({ ...e, ts: Date.now() });
+  if (s.tuneEvents.length > MAX_TUNE_EVENTS) s.tuneEvents.shift();
+}
+
+/** The self-tune history — newest last. Empty until the first nudge (needs grades). */
+export function getTuneEvents(): TuneEvent[] {
+  return state().tuneEvents;
+}
 export function recordAction(a: Omit<BrainAction, 'ts'>): void {
   const s = state();
   s.recentActions.unshift({ ...a, ts: Date.now() });
@@ -387,6 +417,7 @@ export function snapshot() {
     llm: { inCooldown: llmInCooldown(), cooldownUntil: llmCooldownUntilTs(), consecutiveFailures: llmConsecutiveFailures },
     stats: s.stats,
     samples: s.statsSamples,
+    tuneEvents: s.tuneEvents,
     watch: allWatch(),
     recentActions: s.recentActions,
   };

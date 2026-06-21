@@ -14,6 +14,7 @@ import { Separator } from '@/components/ui/separator';
 import {
   Brain, Play, Pause, Zap, RefreshCw, Gauge, Database, TrendingDown, Coins,
   Activity, Crosshair, Clock, AlertTriangle, CheckCircle2, Radio, Sparkles, Target,
+  Eye, Snowflake, DatabaseZap, Ban,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
@@ -58,6 +59,7 @@ interface BrainSnapshot {
   llm: { inCooldown: boolean; cooldownUntil: number; consecutiveFailures: number };
   stats: BrainStats;
   samples?: { ts: number; tokensUsed: number; tokensSaved: number }[];
+  tuneEvents?: { ts: number; field: string; from: number; to: number; reason: string; winRate: number; sampleSize: number }[];
   watch: AssetWatch[];
   recentActions: BrainAction[];
 }
@@ -112,6 +114,17 @@ function humanizeReason(reason: string): string {
     'no-llm': 'no llm',
   };
   return map[reason] ?? reason;
+}
+// Color-coded icon per brain action — so the watch list conveys WHAT the brain
+// is doing per asset at a glance, not just a word. analyze=Zap(sky),
+// cache=DatabaseZap(violet), skip=Eye(muted), paused=Ban(rose).
+function actionIcon(action: string): { Icon: typeof Zap; color: string } {
+  if (action === 'analyze') return { Icon: Zap, color: 'text-sky-400' };
+  if (action === 'cache') return { Icon: DatabaseZap, color: 'text-violet-400' };
+  if (action === 'skip') return { Icon: Eye, color: 'text-muted-foreground' };
+  if (action === 'paused') return { Icon: Ban, color: 'text-rose-400' };
+  if (action === 'watch') return { Icon: Activity, color: 'text-amber-400' };
+  return { Icon: Eye, color: 'text-muted-foreground' };
 }
 
 export function BrainPanel() {
@@ -315,8 +328,18 @@ export function BrainPanel() {
                     animate={{ opacity: 1, x: 0 }}
                     className="group flex items-center gap-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2 hover:bg-muted/40 transition-colors"
                   >
-                    <div className="flex flex-col items-center w-12 shrink-0">
-                      <span className="text-[10px] text-muted-foreground">NOTE</span>
+                    {/* Action icon — color-coded so the brain's per-asset activity
+                        is instantly clear (Zap=analyzing, Eye=skipping, etc). */}
+                    {(() => {
+                      const { Icon, color } = actionIcon(w.lastAction);
+                      return (
+                        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/40', color)} title={w.lastAction}>
+                          <Icon className="h-4 w-4" />
+                        </div>
+                      );
+                    })()}
+                    <div className="flex flex-col items-center w-10 shrink-0">
+                      <span className="text-[9px] text-muted-foreground">NOTE</span>
                       <span className={cn('text-sm font-bold tabular-nums', w.lastNoteworthiness >= 65 ? 'text-rose-400' : w.lastNoteworthiness >= 35 ? 'text-amber-400' : 'text-muted-foreground')}>{w.lastNoteworthiness}</span>
                     </div>
                     <div className="min-w-0 flex-1">
@@ -423,6 +446,39 @@ export function BrainPanel() {
           <CfgSlider label="Budget Cap (tokens/window)" hint="Hard ceiling per rolling window" value={live?.budgetCap ?? 60000} min={5000} max={200000} step={5000} onChange={(v) => setCfg((c) => ({ ...c, budgetCap: v }))} onCommit={(v) => commitCfg({ budgetCap: v })} display={fmt(live?.budgetCap ?? 60000)} />
           <CfgSlider label="Cache TTL (min)" hint="Reuse verdict if data unchanged within this" value={Math.round((live?.cacheTtlMs ?? 1800000) / 60000)} min={5} max={120} step={5} onChange={(v) => setCfg((c) => ({ ...c, cacheTtlMs: v * 60000 }))} onCommit={(v) => commitCfg({ cacheTtlMs: v * 60000 })} />
           <CfgSlider label="Min Reanalyze Gap (min)" hint="Soonest to re-call the LLM for one asset" value={Math.round((live?.minReanalyzeMs ?? 600000) / 60000)} min={1} max={60} step={1} onChange={(v) => setCfg((c) => ({ ...c, minReanalyzeMs: v * 60000 }))} onCommit={(v) => commitCfg({ minReanalyzeMs: v * 60000 })} />
+        </CardContent>
+      </Card>
+
+      {/* Self-tune history — shows the brain learning over time. Each nudge is
+          recorded with the field, from→to, win-rate at the time, + reason.
+          Empty until the first graded signals expire (24h) and self-tuning fires. */}
+      <Card className="border-border/60 ring-1 ring-inset ring-border/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-400" /> Self-Tune History <span className="text-[10px] font-normal text-muted-foreground ml-1">threshold evolution · autonomous learning</span></CardTitle>
+        </CardHeader>
+        <CardContent>
+          {(snap?.tuneEvents ?? []).length === 0 ? (
+            <div className="text-center py-6 text-xs text-muted-foreground/70">
+              <Sparkles className="h-5 w-5 mx-auto mb-1.5 opacity-40" />
+              No threshold nudges yet — self-tuning activates after the first graded signals expire (24h).
+              <div className="text-[10px] mt-1 opacity-70">The brain will record each gate-threshold adjustment here as it learns from win-rate feedback.</div>
+            </div>
+          ) : (
+            <ScrollArea className="h-[160px]">
+              <div className="space-y-1 pr-2">
+                {(snap?.tuneEvents ?? []).slice().reverse().map((e, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs rounded-md px-2 py-1.5 bg-violet-500/[0.05] border border-violet-500/15">
+                    <Badge variant="outline" className="text-[9px] py-0 bg-violet-500/15 text-violet-300 border-violet-500/30">{e.field}</Badge>
+                    <span className="font-mono tabular-nums text-muted-foreground">{e.from}</span>
+                    <span className="text-violet-400">→</span>
+                    <span className="font-mono tabular-nums font-semibold text-violet-300">{e.to}</span>
+                    <span className="text-[10px] text-muted-foreground/70 truncate flex-1">{e.reason}</span>
+                    <span className="text-[9px] text-muted-foreground/60 shrink-0">{e.winRate}% win · n={e.sampleSize}</span>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
         </CardContent>
       </Card>
 
