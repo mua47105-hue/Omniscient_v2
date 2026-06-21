@@ -225,6 +225,40 @@ function spendBudget(tokens: number): void {
   state().budgetUsed += tokens;
 }
 
+// --- Global LLM cooldown: when the active LLM provider rate-limits us (429),
+// we pause ALL LLM calls for a short window. This is the fix for the
+// "thundering herd" problem: without it, an 11-asset scan after back-off
+// expires fires 11 simultaneous requests and they ALL get 429'd again. With
+// it, the first 429 trips a global circuit-breaker; subsequent assets in the
+// same scan (and the next scan, if within the window) skip the LLM and use
+// the deterministic consensus instead. One failure → one cooldown, not eleven.
+let llmCooldownUntil = 0;
+let llmConsecutiveFailures = 0;
+
+/** True if the global LLM circuit-breaker is tripped (rate-limited recently). */
+export function llmInCooldown(): boolean {
+  return Date.now() < llmCooldownUntil;
+}
+/** When the current cooldown ends (epoch ms), or 0 if not cooling down. */
+export function llmCooldownUntilTs(): number {
+  return llmCooldownUntil;
+}
+/**
+ * Record an LLM failure. Trip the circuit-breaker with exponential back-off:
+ * 1st failure → 30s, 2nd → 60s, 3rd+ → 120s. Capped at 120s so the brain
+ * never stays down for long. Reset on the first success.
+ */
+export function recordLlmFailure(): void {
+  llmConsecutiveFailures++;
+  const backoff = Math.min(120_000, 30_000 * Math.pow(2, llmConsecutiveFailures - 1));
+  llmCooldownUntil = Date.now() + backoff;
+  console.log(`[brain] LLM failure #${llmConsecutiveFailures} → global cooldown ${backoff / 1000}s`);
+}
+/** Record an LLM success — clears the consecutive-failure counter. */
+export function recordLlmSuccess(): void {
+  llmConsecutiveFailures = 0;
+}
+
 // --- Watch cache: per-asset last-read of the market ---
 export function getWatch(symbol: string): AssetWatch | undefined {
   return state().watch.get(symbol);
@@ -289,6 +323,7 @@ export function snapshot() {
     mode: s.mode,
     config: s.config,
     budget: { cap: s.config.budgetCap, used: s.budgetUsed, remaining: budgetRemaining(), windowMs: s.config.budgetWindowMs, windowStart: s.budgetWindowStart },
+    llm: { inCooldown: llmInCooldown(), cooldownUntil: llmCooldownUntilTs(), consecutiveFailures: llmConsecutiveFailures },
     stats: s.stats,
     watch: allWatch(),
     recentActions: s.recentActions,

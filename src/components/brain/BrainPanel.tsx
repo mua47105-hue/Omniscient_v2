@@ -13,7 +13,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import {
   Brain, Play, Pause, Zap, RefreshCw, Gauge, Database, TrendingDown, Coins,
-  Activity, Crosshair, Clock, AlertTriangle, CheckCircle2, Radio, Sparkles,
+  Activity, Crosshair, Clock, AlertTriangle, CheckCircle2, Radio, Sparkles, Target,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
@@ -53,6 +53,7 @@ interface BrainSnapshot {
   mode: 'auto' | 'manual';
   config: BrainConfig;
   budget: { cap: number; used: number; remaining: number; windowMs: number; windowStart: number };
+  llm: { inCooldown: boolean; cooldownUntil: number; consecutiveFailures: number };
   stats: BrainStats;
   watch: AssetWatch[];
   recentActions: BrainAction[];
@@ -90,10 +91,42 @@ function actionColor(a: string): string {
 function tierLabel(t: number): string {
   return t === 0 ? 'det' : t === 1 ? 'triage' : 'deep';
 }
+// Humanize internal reason codes → operator-friendly labels. The raw codes
+// (llm-failed-fallback, calm-recently-analyzed, …) are useful for debugging
+// but read as noise in the watch list. This maps them to clear English.
+function humanizeReason(reason: string): string {
+  const map: Record<string, string> = {
+    'unanimous-deterministic': 'math agrees',
+    'budget-exhausted': 'budget hit',
+    'llm-cooldown': 'rate-limited',
+    'llm-failed-fallback': 'rate-limited',
+    'calm-recently-analyzed': 'calm',
+    'data-unchanged': 'unchanged',
+    'high-noteworthiness': 'hot',
+    'noteworthy': 'active',
+    'manual-force-run': 'manual',
+    'brain-paused': 'paused',
+    'no-llm': 'no llm',
+  };
+  return map[reason] ?? reason;
+}
 
 export function BrainPanel() {
   const qc = useQueryClient();
   const brain = useQuery({ queryKey: ['brain'], queryFn: fetchBrain, refetchInterval: 4000 });
+  // Win-rate from the grading loop — powers the self-tuning feedback stat tile.
+  // Slow refresh (60s) since grades only change when signals expire (24h).
+  const winRateQ = useQuery({
+    queryKey: ['brain-winrate'],
+    queryFn: async () => {
+      const r = await fetch('/api/analytics/models', { cache: 'no-store' });
+      const j = await r.json();
+      if (!j.success) return { totalGraded: 0, accuracy: 0 };
+      return { totalGraded: j.data?.overall?.totalGraded ?? 0, accuracy: j.data?.overall?.overallAccuracy ?? 0 };
+    },
+    refetchInterval: 60000,
+    retry: 1,
+  });
   const [cfg, setCfg] = useState<Partial<BrainConfig> | null>(null);
 
   const snap = brain.data;
@@ -140,6 +173,23 @@ export function BrainPanel() {
         </div>
       </div>
 
+      {/* LLM circuit-breaker banner — shown when the global cooldown is active.
+          Tells the operator WHY no LLM calls are happening (rate-limited) and
+          when the brain will retry. */}
+      {snap?.llm?.inCooldown && (
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
+          <div className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-sm font-medium text-amber-300">LLM circuit-breaker active</span>
+              <span className="text-xs text-amber-400/70 ml-2">
+                Rate-limited {snap.llm.consecutiveFailures}× — using deterministic consensus. Retries in {Math.max(0, Math.ceil((snap.llm.cooldownUntil - Date.now()) / 1000))}s.
+              </span>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Controls */}
       <Card className="border-border/60 ring-1 ring-inset ring-border/30">
         <CardContent className="p-4 flex flex-wrap items-center gap-3">
@@ -181,11 +231,18 @@ export function BrainPanel() {
       </Card>
 
       {/* Token economy scoreboard */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <StatTile icon={<Coins className="h-4 w-4" />} label="Tokens Used" value={fmt(stats?.tokensUsed ?? 0)} accent="text-sky-400" sub={`${stats?.llmCallsTotal ?? 0} LLM calls`} />
         <StatTile icon={<TrendingDown className="h-4 w-4" />} label="Tokens Saved" value={fmt(stats?.tokensSaved ?? 0)} accent="text-emerald-400" sub={`${savedPct.toFixed(0)}% of gross`} />
         <StatTile icon={<Database className="h-4 w-4" />} label="Cache Hits" value={`${stats?.cacheHits ?? 0}`} accent="text-violet-400" sub="reused verdicts" />
         <StatTile icon={<Zap className="h-4 w-4" />} label="Skips" value={`${(stats?.llmCallsSkipped ?? 0) + (stats?.budgetSkips ?? 0)}`} accent="text-amber-400" sub="unanimous + budget" />
+        <StatTile
+          icon={<Target className="h-4 w-4" />}
+          label="Win Rate"
+          value={winRateQ.data?.totalGraded ? `${(winRateQ.data.accuracy * 100).toFixed(0)}%` : '—'}
+          accent={winRateQ.data?.accuracy != null && winRateQ.data.accuracy >= 0.5 ? 'text-emerald-400' : 'text-rose-400'}
+          sub={winRateQ.data?.totalGraded ? `${winRateQ.data.totalGraded} graded · self-tunes` : 'awaiting grades'}
+        />
       </div>
 
       {/* Budget bar */}
@@ -234,7 +291,7 @@ export function BrainPanel() {
                         <span className="opacity-50">·</span>
                         <span className="font-mono text-[10px]">{tierLabel(w.lastTier)}</span>
                         <span className="opacity-50">·</span>
-                        <span className="truncate">{w.lastReason}</span>
+                        <span className="truncate">{humanizeReason(w.lastReason)}</span>
                       </div>
                     </div>
                     {w.lastVerdict && (
@@ -284,7 +341,7 @@ export function BrainPanel() {
                           <Badge variant="outline" className={cn('text-[9px] py-0', a.direction === 'long' ? 'text-emerald-400' : 'text-rose-400')}>{a.direction}</Badge>
                         )}
                       </div>
-                      <div className="text-muted-foreground/70 text-[10px] truncate">{a.reason} · {ago(a.ts)}</div>
+                      <div className="text-muted-foreground/70 text-[10px] truncate">{humanizeReason(a.reason)} · {ago(a.ts)}</div>
                     </div>
                   </div>
                 ))}
@@ -349,7 +406,7 @@ function CfgSlider({ label, hint, value, min, max, step, onChange, onCommit, dis
       <Slider value={[value]} min={min} max={max} step={step}
         onValueChange={(v) => onChange(v[0])}
         onValueCommit={(v) => onCommit(v[0])}
-        className="[&_[role=slider]]:h-4 [&_[role=slider]]:w-4"
+        className="[&_[role=slider]]:h-[18px] [&_[role=slider]]:w-[18px] [&_[role=slider]]:border-2 [&_[role=slider]]:border-sky-300 [&_[role=slider]]:bg-sky-500 [&_[role=slider]]:shadow-md [&_[role=slider]]:shadow-sky-500/40 [&_[role=slider]]:ring-2 [&_[role=slider]]:ring-sky-400/20 [&_[role=slider]]:transition-transform [&_[role=slider]]:hover:scale-110 [&>span:first-child]:bg-sky-500/20"
       />
       <p className="text-[10px] text-muted-foreground/70">{hint}</p>
     </div>

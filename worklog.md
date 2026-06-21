@@ -104,3 +104,38 @@ Unresolved / next-phase opportunities (for the 15-min cron):
 - Wire Reddit sentiment into the consensus sentiment layer (when not IP-blocked).
 - Model tiering: configure a separate triage model (cheaper) vs deep model.
 - More free data sources: GDELT global events, on-chain (blockchain.info), GitHub dev-activity.
+
+---
+Task ID: 3
+Agent: main (15-min cron review #1)
+Task: QA + fixes + deeper autonomy (self-tuning, cross-asset triggers) + UI polish.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 29/30 ticks ok). Brain running, auto mode, 11 assets watched. Token economy proven (2.9× savings). Lint clean, no runtime errors.
+- QA via agent-browser: all key pages render (/ /brain /crypto /signals /macro /settings). VLM assessed the UI — watch-list labels were raw internal codes ("llm-failed-fallback"), slider handles lacked contrast.
+
+## Bugs found + fixed
+1. **Thundering-herd rate-limiting (functional bug)**: when Pollinations 429s one asset, the brain re-attempted ALL 11 assets simultaneously after back-off expired → 11 failed calls. FIX: added a **global LLM circuit-breaker** (state.ts: `llmInCooldown`, `recordLlmFailure`/`recordLlmSuccess`, exponential backoff 30s→60s→120s capped). The first 429 trips it; sibling assets in the same scan skip the LLM (`reason: llm-cooldown`) and use deterministic consensus. Force-run bypasses it (manual control preserved).
+2. **UI: raw reason codes** in watch list/action feed. FIX: `humanizeReason()` maps `calm-recently-analyzed`→"calm", `llm-failed-fallback`/`llm-cooldown`→"rate-limited", `unanimous-deterministic`→"math agrees", etc.
+
+## New features (deeper autonomy)
+3. **Self-tuning thresholds from grading feedback** (`src/lib/brain/selftune.ts`): after each scan, reads the 40 most-recent SignalOutcome grades, splits by conviction band, nudges `unanimousConviction` + `minNoteworthiness` toward better calibration. Conservative: needs ≥12 grades, max ±2/run, bounded [55-85]/[20-55], only in auto mode. Records a `SELF-TUNE` action. Currently reports "insufficient graded sample" (no signals have expired yet — needs 24h).
+4. **Cross-asset triggers** (`src/lib/brain/triggers.ts`): after a scan, if BTC/ETH is in a volatile regime or high-noteworthiness, queues correlated alts for re-analysis next tick via forceRun (clears their cadence back-off). Free + deterministic detection (zero tokens). Storm-guard: skips followers analyzed <2min ago.
+5. Both wired into the scheduler tick POST (best-effort, never block). Response now includes `triggers` + `tune` summaries.
+
+## UI polish
+6. **LLM circuit-breaker banner**: amber banner under the header when cooldown is active — tells the operator WHY no LLM calls are happening + retry countdown.
+7. **Win Rate stat tile** (5th tile, xl:grid-cols-5): reads /api/analytics/models, shows accuracy % + graded count, color-coded (emerald ≥50%, rose <50%). Subtext "self-tunes" ties it to the self-tuning feature.
+8. **Slider handle contrast**: config sliders now have bright sky-blue handles with border, shadow, ring, hover-scale (VLM: 6/10 → 9/10 visibility).
+9. Humanized reason labels across watch list + action feed.
+
+## Verification results
+- Lint clean. dev.log: no errors from new code. Scheduler 29/30 ok. Pages: / /brain /crypto /signals all 200.
+- agent-browser: brain page renders all 5 stat tiles (incl Win Rate "awaiting grades"), watch list shows "calm"/"rate-limited" labels, cooldown banner hidden when not active.
+- VLM UI assessment: watch-list labels 8/10, slider handles 9/10.
+- Brain stats: 40 ticks, 6 LLM calls, 24 skips, 1 cache hit, 2331 tokens used / 6750 saved (2.9×).
+- Tick response includes `triggers: null` (no volatile anchors currently) + `tune: {tuned:false, reason:"insufficient graded sample"}` — both features wired + functioning, waiting for data.
+
+## Unresolved / next-phase recommendations
+- Self-tuning + cross-asset triggers are wired but data-starved (need 24h for first grades; need a volatile anchor session for triggers). They'll activate autonomously as data accrues — no action needed.
+- Next cron could: (a) add a "brain health" mini-card to the main dashboard (overview) surfacing brain status to casual viewers, (b) wire Reddit sentiment into the consensus sentiment layer when not IP-blocked, (c) add a free on-chain data source (blockchain.info), (d) add a "self-tune history" log view so operators can see the thresholds evolving.

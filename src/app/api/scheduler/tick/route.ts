@@ -20,9 +20,12 @@ import { getSetting, setSetting, SETTING_KEYS } from '@/lib/config/settings';
 import {
   hydrate, isRunning, tickStarted, getWatch, setWatch, getConfig, budgetExhausted,
   recordSkip, recordCacheHit, recordBudgetSkip, recordLlmCall, recordAlert, recordAction,
+  recordLlmFailure, recordLlmSuccess, llmInCooldown,
   consumeForceRunQueue, type AssetWatch,
 } from '@/lib/brain/state';
 import { gateDecide } from '@/lib/brain/engine';
+import { selfTune } from '@/lib/brain/selftune';
+import { checkCrossAssetTriggers } from '@/lib/brain/triggers';
 import type { ApiResult, TechnicalIndicators, OrderBook, Ticker } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -149,7 +152,18 @@ async function analyzeAsset(
     // attempt instead of re-hitting the rate limit every scan.
     attemptedLlm = decision.action === 'analyze' || forceDeep;
 
-    if (decision.action === 'skip' && !forceDeep) {
+    // Global LLM circuit-breaker: if a recent call rate-limited (429), skip the
+    // LLM entirely for ALL assets until the cooldown expires. This prevents the
+    // thundering-herd problem where 11 assets all fire 429'd requests at once.
+    // Force-run (manual override) bypasses this — the operator asked for it.
+    if (attemptedLlm && llmInCooldown() && !forceDeep) {
+      action = 'skip';
+      reason = 'llm-cooldown';
+      tier = 0;
+      attemptedLlm = false;
+      recordSkip(decision.estimatedSavedTokens);
+      recordBudgetSkip(decision.estimatedSavedTokens);
+    } else if (decision.action === 'skip' && !forceDeep) {
       recordSkip(decision.estimatedSavedTokens);
       if (reason === 'budget-exhausted') recordBudgetSkip(decision.estimatedSavedTokens);
     } else if (decision.action === 'cache' && !forceDeep) {
@@ -185,9 +199,13 @@ async function analyzeAsset(
         llmLayer = { layer: 'technical', score: parsed.score, confidence: parsed.confidence ?? 70, detail: parsed.rationale.slice(0, 120), model };
         tokensUsed = (result.usage?.promptTokens ?? 0) + (result.usage?.completionTokens ?? 0) || maxTokens;
         recordLlmCall(tokensUsed);
+        recordLlmSuccess(); // clear the consecutive-failure counter
       } catch {
         // Tiered: LLM failure falls back to the deterministic consensus. The
-        // signal is still saved — just without the LLM layer this tick.
+        // signal is still saved — just without the LLM layer this tick. The
+        // global cooldown is tripped so sibling assets in this scan skip the
+        // LLM instead of all hitting the rate limit together.
+        recordLlmFailure();
         action = 'skip';
         reason = 'llm-failed-fallback';
         tier = 0;
@@ -366,6 +384,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Cross-asset triggers: after a scan, if an anchor (BTC/ETH) is volatile
+    // or high-noteworthiness, queue correlated alts for re-analysis next tick.
+    // Free + deterministic — zero tokens spent on detection.
+    let triggerSummary: { triggered: number; queued: number; details: any[] } | null = null;
+    try {
+      if (isRunning()) {
+        const triggers = checkCrossAssetTriggers();
+        if (triggers.length > 0) {
+          triggerSummary = { triggered: triggers.length, queued: triggers.reduce((s, t) => s + t.queued.length, 0), details: triggers };
+        }
+      }
+    } catch { /* best-effort */ }
+
+    // Self-tuning: read recent graded signals and nudge gate thresholds toward
+    // better calibration. Conservative (needs ≥12 grades, max ±2 nudge, bounded).
+    let tuneSummary: any = null;
+    try {
+      tuneSummary = await selfTune();
+    } catch { /* best-effort — tuning never blocks the tick */ }
+
     // Best-effort Supabase sync.
     let syncSummary: { totalSynced: number; totalErrors: number } | null = null;
     try {
@@ -375,7 +413,7 @@ export async function POST(req: NextRequest) {
       console.log(`[supabase-sync] Auto-synced ${syncResult.totalSynced} rows in ${syncResult.durationMs}ms`);
     } catch { /* non-fatal */ }
 
-    return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary } });
+    return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary; triggers: typeof triggerSummary; tune: typeof tuneSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary, triggers: triggerSummary, tune: tuneSummary } });
   } catch (e: any) {
     return NextResponse.json<ApiResult<never>>({ success: false, error: e.message }, { status: 500 });
   }
