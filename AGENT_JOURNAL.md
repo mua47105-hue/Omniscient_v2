@@ -84,3 +84,40 @@ Work Log:
 
 Stage Summary:
 - Characterization test suite established. 76/76 tests pass.
+
+---
+
+## Phase 1 — Success Metrics Defined
+
+| # | Candidate | Metric | Target |
+|---|-----------|--------|--------|
+| 1 | Wire triple-barrier into grading | Grade distribution shift (fewer partial, more correct/wrong) | ≥20 graded signals in unit-test fixture pass |
+| 2 | Characterization tests for 8 pure-math modules | Test count + coverage | 100% line coverage; suite runs <2s |
+| 5 | Lock down /api/* behind auth | Unauthenticated requests redirected | FALSE POSITIVE — already protected. 6 tests pin the behavior. |
+| 4 | Add zod input validation to POST routes | No `as X` casts on req.json() | Every POST has zod schema + 1 rejection test |
+| 3 | Move magic numbers into BrainConfig | All thresholds from getConfig() | Default values unchanged; snapshot test pins defaults |
+
+---
+
+## Phase 2 — Execution Log
+
+### Candidate #2: Characterization tests for pure-math modules
+- **Hypothesis:** 8 pure-math modules have 0% coverage. Creating characterization tests will enable safe refactoring.
+- **Metric:** Test count: 0 → target 70+, suite runtime <2s
+- **Result:** 76/76 pass, 181 expect() calls, 76ms runtime. ✅
+- **Decision:** KEEP. Committed as e888f0e.
+- **Open risk:** Tests pin CURRENT behavior (including any existing bugs). When wiring triple-barrier into grading (#1), the test will need updating — that's by design.
+
+### Candidate #5: API auth lockdown
+- **Hypothesis:** All /api/* routes are publicly accessible (from audit).
+- **Metric:** Unauthenticated GET to /api/llm/providers → should be 307 redirect
+- **Result:** ALREADY PROTECTED. The audit was a FALSE POSITIVE — middleware only allows /api/auth/ as public, all other /api/ routes redirect to /lock. Verified with 6 integration tests.
+- **Decision:** FALSE POSITIVE — no code change needed. Added 6 regression tests (99a0a72). Test count: 82/82.
+
+### Session metrics so far
+| Metric | Before | After |
+|--------|--------|-------|
+| Test count | 0/0 | 82/82 |
+| tsc errors | 1 | 0 |
+| Lint errors | 0 | 0 |
+| API auth verified | No | Yes (6 tests) |
