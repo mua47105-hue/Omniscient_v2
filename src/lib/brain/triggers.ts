@@ -12,8 +12,7 @@
 // live — good enough for a trigger, and avoids spending tokens or API calls
 // on a correlation matrix every tick.
 
-import { forceRun } from '@/lib/brain/state';
-import { getWatch } from '@/lib/brain/state';
+import { forceRun, getWatch, recordAction } from '@/lib/brain/state';
 
 // Static correlation groups: if the anchor moves, the followers get re-queued.
 // Anchors are the highest-cap, most-dominant assets; followers are the alts
@@ -75,6 +74,15 @@ export function checkCrossAssetTriggers(): TriggerResult[] {
         movePct: anchor.lastNoteworthiness, // reuse the 0-100 noteworthiness as the "intensity"
         queued,
         reason: `${group.anchor} ${isVolatile ? 'volatile' : 'high-noteworthiness'} (${anchor.lastNoteworthiness}) → re-analyze ${queued.length} correlated alts`,
+      });
+      // Record a visible action so operators see the cross-asset trigger fire
+      // in the brain's action feed (autonomy made visible).
+      recordAction({
+        symbol: `${group.anchor}→TRIGGER`,
+        action: 'cross-asset',
+        tier: 0,
+        reason: `${isVolatile ? 'volatile' : 'high-note'} → ${queued.length} alts queued`,
+        conviction: anchor.lastNoteworthiness,
       });
     }
   }

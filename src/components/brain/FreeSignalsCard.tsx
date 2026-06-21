@@ -4,11 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Flame, Gauge, MessageSquare, TrendingUp, ExternalLink } from 'lucide-react';
+import { Flame, Gauge, MessageSquare, TrendingUp, ExternalLink, Boxes } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface TrendingCoin { rank: number; coinId: string; symbol: string; name: string; marketCapRank: number | null; priceBtc: number; score: number; }
 interface FearGreed { value: number; classification: string; timestamp: number; }
+interface OnChainStats { txCount24h: number; hashRate: number; difficulty: number; fetchedAt: number; }
 
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url, { cache: 'no-store' });
@@ -29,10 +30,12 @@ export function FreeSignalsCard() {
   const trendingQ = useQuery({ queryKey: ['cg-trending'], queryFn: () => fetchJson<{ trending: TrendingCoin[] }>(`/api/crypto/trending`).then((d) => d.trending), refetchInterval: 5 * 60 * 1000, retry: 1 });
   const fgQ = useQuery({ queryKey: ['fg-brain'], queryFn: () => fetchJson<FearGreed>(`/api/macro/fear-greed`), refetchInterval: 15 * 60 * 1000, retry: 1 });
   const redditQ = useQuery({ queryKey: ['reddit-sentiment'], queryFn: () => fetchJson<{ available: boolean; aggregate?: { score: number; label: string; postsAnalyzed: number; bullishHits: number; bearishHits: number }; reason?: string }>(`/api/sentiment/reddit`), refetchInterval: 10 * 60 * 1000, retry: 1 });
+  const onchainQ = useQuery({ queryKey: ['onchain'], queryFn: () => fetchJson<OnChainStats>(`/api/onchain/stats`), refetchInterval: 15 * 60 * 1000, retry: 1 });
 
   const trending = trendingQ.data ?? [];
   const fg = fgQ.data;
   const reddit = redditQ.data;
+  const onchain = onchainQ.data;
 
   return (
     <Card className="border-border/60 ring-1 ring-inset ring-border/30">
@@ -42,7 +45,7 @@ export function FreeSignalsCard() {
           <span className="text-[10px] font-normal text-muted-foreground ml-1">zero-token signals</span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-4 md:grid-cols-3">
+      <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {/* Trending */}
         <div>
           <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
@@ -118,7 +121,37 @@ export function FreeSignalsCard() {
             </div>
           )}
         </div>
+
+        {/* On-chain BTC fundamentals */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+            <Boxes className="h-3.5 w-3.5" /> BTC On-Chain
+          </div>
+          {onchainQ.isLoading ? (
+            <div className="h-[170px] space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-6 rounded bg-muted/40 animate-pulse" />)}</div>
+          ) : !onchain ? (
+            <div className="text-xs text-muted-foreground/60 py-4 text-center h-[170px] flex items-center justify-center">Unavailable</div>
+          ) : (
+            <div className="space-y-1.5 h-[170px]">
+              <OnChainRow label="Hashrate" value={`${(onchain.hashRate / 1e9).toFixed(1)} EH/s`} hint="miner confidence" accent="text-sky-400" />
+              <OnChainRow label="24h Txns" value={onchain.txCount24h.toLocaleString()} hint="network demand" accent="text-emerald-400" />
+              <OnChainRow label="Difficulty" value={`${(onchain.difficulty / 1e12).toFixed(1)}T`} hint="security budget" accent="text-violet-400" />
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+function OnChainRow({ label, value, hint, accent }: { label: string; value: string; hint: string; accent: string }) {
+  return (
+    <div className="flex items-center justify-between rounded-md border border-border/40 bg-muted/20 px-2.5 py-1.5">
+      <div className="min-w-0">
+        <div className="text-[10px] text-muted-foreground">{label}</div>
+        <div className="text-[9px] text-muted-foreground/60">{hint}</div>
+      </div>
+      <span className={cn('text-sm font-bold tabular-nums', accent)}>{value}</span>
+    </div>
   );
 }

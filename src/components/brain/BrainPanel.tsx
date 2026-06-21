@@ -324,27 +324,45 @@ export function BrainPanel() {
         {/* Recent actions */}
         <Card className="border-border/60 ring-1 ring-inset ring-border/30">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-400" /> Action Feed</CardTitle>
+            <CardTitle className="text-sm flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-400" /> Action Feed <span className="text-[10px] font-normal text-muted-foreground ml-1">live</span></CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="h-[420px]">
               <div className="px-4 pb-4 space-y-1.5">
-                {(snap?.recentActions ?? []).map((a, i) => (
-                  <div key={i} className="flex items-start gap-2 text-xs">
-                    <span className={cn('mt-1 h-1.5 w-1.5 rounded-full shrink-0', actionColor(a.action).replace('text-', 'bg-'))} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold">{a.symbol.replace('USDT', '')}</span>
-                        <span className={actionColor(a.action)}>{a.action}</span>
-                        {a.tokens != null && <Badge variant="outline" className="text-[9px] py-0">{a.tokens} tok</Badge>}
-                        {a.direction && a.direction !== 'neutral' && (
-                          <Badge variant="outline" className={cn('text-[9px] py-0', a.direction === 'long' ? 'text-emerald-400' : 'text-rose-400')}>{a.direction}</Badge>
-                        )}
+                {(snap?.recentActions ?? []).map((a, i) => {
+                  // Autonomy events (self-tune, triggers) get highlighted rows
+                  // so the brain's higher-level reasoning is visible, not just
+                  // the per-asset skip/analyze churn.
+                  const isAutonomy = a.action === 'self-tune' || a.action === 'cross-asset' || a.symbol.includes('TRIGGER') || a.symbol === 'SELF-TUNE';
+                  return (
+                    <div key={i} className={cn(
+                      'flex items-start gap-2 text-xs rounded-md px-1.5 py-1 transition-colors',
+                      isAutonomy && 'bg-violet-500/[0.07] ring-1 ring-inset ring-violet-500/20'
+                    )}>
+                      <span className={cn('mt-1 h-1.5 w-1.5 rounded-full shrink-0', isAutonomy ? 'bg-violet-400' : actionColor(a.action).replace('text-', 'bg-'))} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold">{a.symbol.replace('USDT', '')}</span>
+                          {isAutonomy ? (
+                            <Badge variant="outline" className="text-[9px] py-0 gap-0.5 bg-violet-500/15 text-violet-300 border-violet-500/30">
+                              <Sparkles className="h-2.5 w-2.5" />{a.action}
+                            </Badge>
+                          ) : (
+                            <span className={actionColor(a.action)}>{a.action}</span>
+                          )}
+                          {a.tokens != null && <Badge variant="outline" className="text-[9px] py-0">{a.tokens} tok</Badge>}
+                          {a.direction && a.direction !== 'neutral' && (
+                            <Badge variant="outline" className={cn('text-[9px] py-0', a.direction === 'long' ? 'text-emerald-400' : 'text-rose-400')}>{a.direction}</Badge>
+                          )}
+                          {a.conviction != null && isAutonomy && (
+                            <Badge variant="outline" className="text-[9px] py-0 text-violet-300/80">{a.conviction}% win</Badge>
+                          )}
+                        </div>
+                        <div className="text-muted-foreground/70 text-[10px] truncate">{humanizeReason(a.reason)} · {ago(a.ts)}</div>
                       </div>
-                      <div className="text-muted-foreground/70 text-[10px] truncate">{humanizeReason(a.reason)} · {ago(a.ts)}</div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {!snap?.recentActions.length && (
                   <div className="text-center text-sm text-muted-foreground py-12 opacity-60">No actions yet.</div>
                 )}

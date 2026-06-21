@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 import type { Ticker, ApiResult } from '@/lib/types';
 import { useLiveTicker } from '@/hooks/useLiveTicker';
+import { BrainStatusCard } from '@/components/brain/BrainStatusCard';
 
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url);
@@ -108,6 +109,10 @@ export function OverviewClient() {
           Real-time global market intelligence · Deep multi-layer analysis · 24/7 monitoring
         </p>
       </div>
+
+      {/* Brain status banner — surfaces the autonomous system's vital signs
+          on the landing page so casual viewers see it's running. Links to /brain. */}
+      <BrainStatusCard />
 
       {/* Stat cards */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">

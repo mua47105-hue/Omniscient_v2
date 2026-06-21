@@ -139,3 +139,34 @@ Task: QA + fixes + deeper autonomy (self-tuning, cross-asset triggers) + UI poli
 ## Unresolved / next-phase recommendations
 - Self-tuning + cross-asset triggers are wired but data-starved (need 24h for first grades; need a volatile anchor session for triggers). They'll activate autonomously as data accrues — no action needed.
 - Next cron could: (a) add a "brain health" mini-card to the main dashboard (overview) surfacing brain status to casual viewers, (b) wire Reddit sentiment into the consensus sentiment layer when not IP-blocked, (c) add a free on-chain data source (blockchain.info), (d) add a "self-tune history" log view so operators can see the thresholds evolving.
+
+---
+Task ID: 4
+Agent: main (15-min cron review #2)
+Task: QA + make autonomy visible (dashboard brain card, autonomy log) + free on-chain data source.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 36/37 ticks ok). Brain running, auto mode, 47 ticks, 6 LLM calls, 24 skips, 2331 tokens used / 6750 saved (2.9×). Lint clean, no runtime errors.
+- QA via agent-browser + VLM: all 7 key pages render 200. VLM flagged two gaps: (1) no brain-status indicator on the main dashboard — casual viewers land on `/` and see nothing about the autonomous system; (2) the new autonomy features (self-tune, cross-asset triggers) run invisibly in the backend, not surfaced in the brain UI.
+
+## Completed modifications
+1. **Brain Status card on the overview dashboard** (`src/components/brain/BrainStatusCard.tsx` + wired into OverviewClient): a prominent banner directly under the hero showing AUTONOMOUS/PAUSED badge with live pulse, assets-watched count, last-tick ago, and 3 mini-stats (Tokens used, Saved %, LLM calls). Links to /brain. VLM: "clearly communicates the autonomous system is running" (7/10 polish).
+2. **Autonomy Log in the brain action feed** (`src/components/brain/BrainPanel.tsx`): self-tune + cross-asset trigger events now get highlighted violet rows with a Sparkles badge + conviction/win-rate chip, so the brain's higher-level reasoning is visible — not just the per-asset skip/analyze churn. Cross-asset triggers now `recordAction` so they appear in the feed (was invisible before).
+3. **Free on-chain data source** (`src/lib/market/onchain.ts` + `/api/onchain/stats`): blockchain.info /q endpoints — BTC hashrate (EH/s), 24h tx count, difficulty (T). Zero tokens, zero API key, 15-min cache. Wired as a 4th column in the brain's FreeSignalsCard (Trending / Fear&Greed / Reddit / On-Chain). Live data confirmed: 701,998 txns, 869 GH/s, 125T difficulty.
+
+## UI polish
+4. BrainStatusCard: animated ping pulse on the brain icon when running, ambient sky/teal gradient, hover lift + arrow nudge, COOLDOWN badge appears when the LLM circuit-breaker is active.
+5. FreeSignalsCard: grid upgraded to 4 columns on xl, on-chain rows with semantic hints ("miner confidence", "network demand", "security budget").
+6. Action feed: autonomy events highlighted with violet tint + ring so they stand out from routine skips.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 36/37 ok. Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: dashboard renders "The Lazy Brain / AUTONOMOUS / assets watched / Tokens" banner; brain page FreeSignalsCard shows "BTC On-Chain / Hashrate / miner confidence / 24h Txns / Difficulty".
+- VLM: brain banner "clearly communicates the autonomous system is running" (7/10).
+- on-chain API: returns live data (txCount24h:701998, hashRate:869GH/s, difficulty:125T).
+- Brain stats stable: 47 ticks, 6 LLM calls, 24 skips, 2.9× token savings.
+
+## Unresolved / next-phase recommendations
+- Self-tuning still data-starved (needs 24h for first grades to expire). It's wired + will activate autonomously — no action needed.
+- Cross-asset triggers will fire when an anchor (BTC/ETH) next enters a volatile/high-noteworthiness regime — also autonomous, no action needed.
+- Next cron could: (a) add a small sparkline/trend to the dashboard brain card showing token-savings over time, (b) add a "brain health" row to the footer, (c) wire on-chain hashrate-trend as a consensus fundamental layer, (d) add a self-tune history mini-chart showing threshold evolution.
