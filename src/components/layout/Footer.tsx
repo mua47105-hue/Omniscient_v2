@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Activity, Heart } from 'lucide-react';
+import { FooterBrainIndicator } from '@/components/brain/FooterBrainIndicator';
 
 export function Footer() {
   return (
@@ -11,10 +12,12 @@ export function Footer() {
           <span className="hidden sm:inline">· Global Market Intelligence · 24/7</span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/settings" className="hover:text-foreground transition-colors">
+          {/* Brain health — visible on every page, links to /brain */}
+          <FooterBrainIndicator />
+          <Link href="/settings" className="hover:text-foreground transition-colors hidden sm:inline">
             Configuration
           </Link>
-          <span className="hidden sm:inline">Free-tier stack</span>
+          <span className="hidden md:inline">Free-tier stack</span>
           <span className="flex items-center gap-1">
             Built with <Heart className="h-3 w-3 fill-rose-500 text-rose-500" /> on free APIs
           </span>

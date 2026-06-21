@@ -26,6 +26,14 @@ function fgColor(v: number): string {
   if (v < 75) return 'text-lime-400';
   return 'text-emerald-400';
 }
+// "Xm ago" from a react-query dataUpdatedAt timestamp — shows freshness per source.
+function freshness(ts: number | undefined): string {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
 
 export function FreeSignalsCard() {
   const trendingQ = useQuery({ queryKey: ['cg-trending'], queryFn: () => fetchJson<{ trending: TrendingCoin[] }>(`/api/crypto/trending`).then((d) => d.trending), refetchInterval: 5 * 60 * 1000, retry: 1 });
@@ -51,8 +59,9 @@ export function FreeSignalsCard() {
       <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {/* Trending */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-            <TrendingUp className="h-3.5 w-3.5" /> CoinGecko Trending
+          <div className="flex items-center justify-between gap-1.5 mb-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" /> CoinGecko</span>
+            <span className="text-[9px] opacity-60">{freshness(trendingQ.dataUpdatedAt)}</span>
           </div>
           <ScrollArea className="h-[170px]">
             <div className="space-y-0.5 pr-2">
@@ -75,8 +84,9 @@ export function FreeSignalsCard() {
 
         {/* Fear & Greed */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-            <Gauge className="h-3.5 w-3.5" /> Fear &amp; Greed
+          <div className="flex items-center justify-between gap-1.5 mb-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5" /> Fear &amp; Greed</span>
+            <span className="text-[9px] opacity-60">{freshness(fgQ.dataUpdatedAt)}</span>
           </div>
           {fgQ.isLoading ? (
             <div className="h-[170px] flex items-center justify-center"><div className="h-10 w-20 rounded bg-muted/40 animate-pulse" /></div>
@@ -96,8 +106,9 @@ export function FreeSignalsCard() {
 
         {/* Reddit sentiment (graceful when blocked) */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-            <MessageSquare className="h-3.5 w-3.5" /> Reddit Sentiment
+          <div className="flex items-center justify-between gap-1.5 mb-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><MessageSquare className="h-3.5 w-3.5" /> Reddit</span>
+            <span className="text-[9px] opacity-60">{freshness(redditQ.dataUpdatedAt)}</span>
           </div>
           {redditQ.isLoading ? (
             <div className="h-[170px] space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-6 rounded bg-muted/40 animate-pulse" />)}</div>
@@ -127,8 +138,9 @@ export function FreeSignalsCard() {
 
         {/* On-chain BTC fundamentals */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-            <Boxes className="h-3.5 w-3.5" /> BTC On-Chain
+          <div className="flex items-center justify-between gap-1.5 mb-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><Boxes className="h-3.5 w-3.5" /> BTC On-Chain</span>
+            <span className="text-[9px] opacity-60">{freshness(onchainQ.dataUpdatedAt)}</span>
           </div>
           {onchainQ.isLoading ? (
             <div className="h-[170px] space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-6 rounded bg-muted/40 animate-pulse" />)}</div>
@@ -145,8 +157,9 @@ export function FreeSignalsCard() {
 
         {/* GitHub dev-activity — commit count for flagship crypto repos */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
-            <GitCommit className="h-3.5 w-3.5" /> Dev Activity
+          <div className="flex items-center justify-between gap-1.5 mb-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5"><GitCommit className="h-3.5 w-3.5" /> Dev Activity</span>
+            <span className="text-[9px] opacity-60">{freshness(devQ.dataUpdatedAt)}</span>
           </div>
           {devQ.isLoading ? (
             <div className="h-[170px] space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-6 rounded bg-muted/40 animate-pulse" />)}</div>

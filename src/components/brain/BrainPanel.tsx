@@ -288,7 +288,7 @@ export function BrainPanel() {
               <span className="text-[9px] uppercase tracking-wider opacity-60">used vs saved</span>
               <Sparkline samples={snap?.samples ?? []} width={220} height={44} />
               <div className="flex items-center gap-3 text-[9px] text-muted-foreground">
-                <span className="flex items-center gap-1"><span className="h-1.5 w-3 rounded-full bg-sky-400" />used</span>
+                <span className="flex items-center gap-1"><span className="h-1.5 w-3 rounded-full bg-amber-400" />used</span>
                 <span className="flex items-center gap-1"><span className="h-1.5 w-3 rounded-full bg-emerald-400" />saved</span>
               </div>
             </div>

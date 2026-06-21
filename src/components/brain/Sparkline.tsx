@@ -57,8 +57,8 @@ export function Sparkline({ samples, width = 240, height = 48, series = 'both', 
       <line x1="0" y1={height - 1} x2={width} y2={height - 1} stroke="currentColor" strokeOpacity="0.12" strokeWidth="1" />
       {/* Saved area (emerald fill) */}
       {series === 'both' && <path d={areaPath} fill="url(#spark-area)" />}
-      {/* Used line (sky) */}
-      {series === 'both' && <path d={usedPath} fill="none" stroke="rgb(56 189 248)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />}
+      {/* Used line (amber — matches the dashboard's token-usage accent) */}
+      {series === 'both' && <path d={usedPath} fill="none" stroke="rgb(251 191 36)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />}
       {/* Saved line (emerald) */}
       <path d={savedPath} fill="none" stroke="rgb(16 185 129)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
       {/* Last-point dot */}

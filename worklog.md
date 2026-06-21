@@ -270,3 +270,28 @@ Task: QA + GitHub dev-activity free source + trigger-stats tile + FreeSignalsCar
 - Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
 - News/cross-asset triggers will fire + count when their conditions are met (breaking news / volatile anchor). Counter ready.
 - Next cron could: (a) self-tune history mini-chart showing threshold evolution, (b) wire on-chain hashrate-trend as a consensus fundamental layer, (c) add refresh timestamps to each FreeSignalsCard column, (d) move news triggers to every-tick (60s) with a 5-min RSS cache for sub-minute breaking-news response, (e) add a "dev-activity delta" — compare this week's commits to last week's as a trend signal.
+
+---
+Task ID: 8
+Agent: main (15-min cron review #6)
+Task: QA + dashboard visual cohesion + FreeSignalsCard freshness timestamps + global footer brain indicator.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 75/79 ticks ok — lastErr: none). Brain running, auto mode, LLM in cooldown (Pollinations 429 on fresh-state first scan — circuit-breaker working as designed). Lint clean, no runtime errors. All 9 pages render 200.
+- QA via agent-browser + VLM: VLM flagged the dashboard brain banner as "disconnected" from the stat cards (sky/purple gradient clashed with the dashboard's emerald/amber/orange palette).
+
+## Completed modifications
+1. **Dashboard visual cohesion** (`src/components/brain/BrainStatusCard.tsx` + `Sparkline.tsx`): shifted the brain banner from sky/teal → emerald-forward palette to match the dashboard's stat-card family (BTC amber, ETH teal, breadth emerald/rose, volume orange). Mini-stat accents now amber (tokens) / emerald (saved) / orange (LLM calls). Sparkline "used" line changed sky→amber, legend updated. VLM: 6/10 → 8/10 ("banner now feels cohesive with the stat cards, visual harmony").
+2. **FreeSignalsCard freshness timestamps** (`src/components/brain/FreeSignalsCard.tsx`): each of the 5 column headers now shows "Xm ago" / "just now" via react-query's `dataUpdatedAt` + a `freshness()` helper. Operators can see at a glance how stale each free source is. Column headers shortened (e.g. "CoinGecko Trending"→"CoinGecko") to fit the timestamp.
+3. **Global footer brain indicator** (`src/components/brain/FooterBrainIndicator.tsx` + wired into Footer): compact client component showing a pulsing emerald dot + "Brain ON" / "cooldown" / "OFF" + tokens-saved count. Visible on EVERY page (verified on /crypto), not just the dashboard. Links to /brain. Amber dot when in cooldown, rose when paused.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 75/79 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: dashboard brain banner renders with emerald/amber/orange accents; footer brain indicator renders on /crypto (non-dashboard page) with "Brain ... tok saved"; FreeSignalsCard columns show freshness ("57s ago").
+- VLM: dashboard cohesion 8/10 ("visual harmony, banner cohesive with stat cards").
+- Brain stats: fresh state after restart (ticks:3, LLM in cooldown from first-scan 429 — circuit-breaker active, will recover in 30-120s).
+
+## Unresolved / next-phase recommendations
+- Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
+- News/cross-asset triggers will fire + count when conditions are met.
+- Next cron could: (a) self-tune history mini-chart, (b) wire on-chain hashrate-trend as a consensus fundamental, (c) move news triggers to every-tick (60s) with a 5-min RSS cache, (d) dev-activity delta (this week vs last week commits), (e) refine the banner gradient to "more defined color blocks" (VLM's only remaining nit).
