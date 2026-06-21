@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Brain, Coins, TrendingDown, Target, Clock, ArrowRight, Pause, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { Sparkline } from '@/components/brain/Sparkline';
 
 interface BrainSnapshot {
   running: boolean;
@@ -14,6 +15,7 @@ interface BrainSnapshot {
   llm: { inCooldown: boolean; consecutiveFailures: number };
   stats: { ticksTotal: number; llmCallsTotal: number; tokensUsed: number; tokensSaved: number; cacheHits: number; lastTickAt: number | null };
   watch: { symbol: string; lastAction: string; lastNoteworthiness: number }[];
+  samples?: { ts: number; tokensUsed: number; tokensSaved: number }[];
 }
 
 async function fetchBrain(): Promise<BrainSnapshot> {
@@ -93,13 +95,19 @@ export function BrainStatusCard() {
               </div>
             </div>
 
-            {/* Right: token-economy mini-stats */}
+            {/* Right: token-economy mini-stats + savings sparkline */}
             <div className="flex items-center gap-4 sm:gap-5">
               <MiniStat icon={<Coins className="h-3.5 w-3.5" />} label="Tokens" value={fmt(snap?.stats.tokensUsed ?? 0)} accent="text-sky-400" />
               <div className="h-8 w-px bg-border/40 hidden sm:block" />
               <MiniStat icon={<TrendingDown className="h-3.5 w-3.5" />} label="Saved" value={`${savedPct.toFixed(0)}%`} accent="text-emerald-400" />
               <div className="h-8 w-px bg-border/40 hidden sm:block" />
               <MiniStat icon={<Target className="h-3.5 w-3.5" />} label="LLM calls" value={`${snap?.stats.llmCallsTotal ?? 0}`} accent="text-violet-400" />
+              {/* Savings sparkline — emerald area = tokens saved, sky line = used.
+                  Label shows the live saved value so the line is interpretable. */}
+              <div className="hidden lg:flex flex-col items-end gap-0.5 text-emerald-400/80">
+                <span className="text-[8px] uppercase tracking-wider opacity-60">{fmt(snap?.stats.tokensSaved ?? 0)} saved</span>
+                <Sparkline samples={snap?.samples ?? []} width={130} height={34} />
+              </div>
               <ArrowRight className="h-4 w-4 text-muted-foreground/40 transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-sky-400 hidden sm:block" />
             </div>
           </CardContent>

@@ -19,6 +19,7 @@ import { motion } from 'framer-motion';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { FreeSignalsCard } from '@/components/brain/FreeSignalsCard';
+import { Sparkline } from '@/components/brain/Sparkline';
 
 // ---- Types mirroring src/lib/brain/state.ts ----
 interface AssetWatch {
@@ -55,6 +56,7 @@ interface BrainSnapshot {
   budget: { cap: number; used: number; remaining: number; windowMs: number; windowStart: number };
   llm: { inCooldown: boolean; cooldownUntil: number; consecutiveFailures: number };
   stats: BrainStats;
+  samples?: { ts: number; tokensUsed: number; tokensSaved: number }[];
   watch: AssetWatch[];
   recentActions: BrainAction[];
 }
@@ -245,17 +247,31 @@ export function BrainPanel() {
         />
       </div>
 
-      {/* Budget bar */}
+      {/* Budget bar + token-economy timeline */}
       <Card className="border-border/60 ring-1 ring-inset ring-border/30">
-        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Gauge className="h-4 w-4 text-sky-400" /> Token Budget (rolling {Math.round((snap?.config.budgetWindowMs ?? 0) / 60000)}min)</CardTitle></CardHeader>
-        <CardContent className="space-y-2">
-          <Progress value={budgetPct} className={cn('h-2.5', budgetPct > 90 ? '[&>div]:bg-rose-500' : budgetPct > 70 ? '[&>div]:bg-amber-500' : '[&>div]:bg-sky-500')} />
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>{fmt(budget?.used ?? 0)} used</span>
-            <span className={budgetPct > 90 ? 'text-rose-400 font-medium' : ''}>{fmt(budget?.remaining ?? 0)} remaining of {fmt(budget?.cap ?? 0)}</span>
+        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Gauge className="h-4 w-4 text-sky-400" /> Token Economy <span className="text-[10px] font-normal text-muted-foreground ml-1">rolling {Math.round((snap?.config.budgetWindowMs ?? 0) / 60000)}min budget · cumulative savings</span></CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex-1 min-w-[180px] space-y-1.5">
+              <Progress value={budgetPct} className={cn('h-2.5', budgetPct > 90 ? '[&>div]:bg-rose-500' : budgetPct > 70 ? '[&>div]:bg-amber-500' : '[&>div]:bg-sky-500')} />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>{fmt(budget?.used ?? 0)} used</span>
+                <span className={budgetPct > 90 ? 'text-rose-400 font-medium' : ''}>{fmt(budget?.remaining ?? 0)} remaining of {fmt(budget?.cap ?? 0)}</span>
+              </div>
+            </div>
+            {/* Savings timeline sparkline — emerald area (saved) vs sky line (used).
+                The gap between them IS the ponytail token-economy benefit, visible over time. */}
+            <div className="flex flex-col items-end gap-0.5 text-emerald-400/80">
+              <span className="text-[9px] uppercase tracking-wider opacity-60">used vs saved</span>
+              <Sparkline samples={snap?.samples ?? []} width={220} height={44} />
+              <div className="flex items-center gap-3 text-[9px] text-muted-foreground">
+                <span className="flex items-center gap-1"><span className="h-1.5 w-3 rounded-full bg-sky-400" />used</span>
+                <span className="flex items-center gap-1"><span className="h-1.5 w-3 rounded-full bg-emerald-400" />saved</span>
+              </div>
+            </div>
           </div>
           <p className="text-[11px] text-muted-foreground/70">
-            When the budget is exhausted the brain downshifts to deterministic-only mode (no LLM) until the window resets — the free-tier safety net.
+            When the budget is exhausted the brain downshifts to deterministic-only mode (no LLM) until the window resets — the free-tier safety net. The gap between the two lines is real tokens not spent.
           </p>
         </CardContent>
       </Card>
@@ -333,7 +349,7 @@ export function BrainPanel() {
                   // Autonomy events (self-tune, triggers) get highlighted rows
                   // so the brain's higher-level reasoning is visible, not just
                   // the per-asset skip/analyze churn.
-                  const isAutonomy = a.action === 'self-tune' || a.action === 'cross-asset' || a.symbol.includes('TRIGGER') || a.symbol === 'SELF-TUNE';
+                  const isAutonomy = a.action === 'self-tune' || a.action === 'cross-asset' || a.action === 'news-event' || a.symbol.includes('TRIGGER') || a.symbol === 'SELF-TUNE';
                   return (
                     <div key={i} className={cn(
                       'flex items-start gap-2 text-xs rounded-md px-1.5 py-1 transition-colors',

@@ -170,3 +170,39 @@ Task: QA + make autonomy visible (dashboard brain card, autonomy log) + free on-
 - Self-tuning still data-starved (needs 24h for first grades to expire). It's wired + will activate autonomously — no action needed.
 - Cross-asset triggers will fire when an anchor (BTC/ETH) next enters a volatile/high-noteworthiness regime — also autonomous, no action needed.
 - Next cron could: (a) add a small sparkline/trend to the dashboard brain card showing token-savings over time, (b) add a "brain health" row to the footer, (c) wire on-chain hashrate-trend as a consensus fundamental layer, (d) add a self-tune history mini-chart showing threshold evolution.
+
+---
+Task ID: 5
+Agent: main (15-min cron review #3)
+Task: QA + news-event triggers (deeper autonomy) + token-economy timeline sparkline.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 45/49 ticks ok — 4 errors were historical from a hot-reload crash, now resolved). Brain running, auto mode, 62 ticks, 6 LLM calls, 2331 tokens used / 7020 saved (3.0×). Lint clean, no runtime errors.
+- QA via agent-browser: all 7 key pages render 200. News API has 50 items available — a news-event trigger can fire NOW (unlike the data-starved self-tuning which needs 24h grades).
+
+## Completed modifications
+1. **News-event triggers** (`src/lib/brain/news-triggers.ts`): free, keyword-based breaking-news detector. Scans crypto RSS (CoinDesk/Cointelegraph/Decrypt) for market-moving keywords (hack/ETF/SEC/regulation/ban/listing/surge/crash/…) with polarity + weight, tags mentioned tracked assets, queues them for re-analysis via forceRun. Seen-article dedup (capped 500) so the same headline doesn't re-trigger. Zero LLM tokens, zero API key. Records a `NEWS→TRIGGER` action (visible in the action feed as an autonomy event). Wired into the scheduler tick (runs on every due scan).
+2. **Token-economy timeline** (`src/lib/brain/state.ts` StatsSample ring buffer + `recordSample()`/`getSamples()`): one sample per tick (capped 120 = ~2h), records cumulative tokensUsed/tokensSaved/llmCalls/skips. Wired into the tick (both the due + skipped paths) so the timeline is continuous. Exposed in the brain snapshot.
+3. **Sparkline component** (`src/components/brain/Sparkline.tsx`): minimal inline-SVG sparkline (no chart lib — ponytail: the platform has <svg>). Emerald area = tokens saved, sky line = tokens used. The gap between them IS the ponytail token-economy benefit, visible over time. Handles <2 samples with a "collecting…" state.
+4. **Dashboard sparkline** (BrainStatusCard): compact 130×34 sparkline with a "{N} saved" label so the line is interpretable, not abstract. Hidden on small screens.
+5. **Brain page sparkline** (BrainPanel budget card → "Token Economy"): larger 220×44 sparkline with a legend (used/saved) beside the budget progress bar. Renamed the card from "Token Budget" to "Token Economy" to reflect the combined budget + timeline view.
+
+## Bug fixed
+6. **Hot-reload migration crash**: `recordSample()` crashed on "Cannot read properties of undefined (reading 'push')" because the running dev server's globalThis brain singleton predated the `statsSamples` field. FIX: `state()` now defensively backfills missing fields (`statsSamples`, `forceRunQueue`) so a stale singleton from a previous code version doesn't crash. Each new state field needs a one-line guard.
+
+## UI polish
+7. Action feed: `news-event` actions now join `self-tune` + `cross-asset` in the highlighted violet autonomy rows.
+8. Dashboard sparkline label changed from "SAVINGS TREND" to "{N} saved" (VLM: tiny abstract label was hard to interpret → now shows the live value).
+9. Brain budget card redesigned into a 2-column layout (progress bar left, sparkline + legend right).
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 45/49 ok (lastErr: none — the 4 errors were pre-fix). Pages: / /brain /crypto /signals all 200.
+- agent-browser: dashboard renders "The Lazy Brain / AUTONOMOUS / {N} saved" + sparkline; brain page renders "Token Economy / USED VS SAVED" + sparkline with legend.
+- Brain stats: 62 ticks, 5 timeline samples, 6 LLM calls, 2331 used / 7020 saved (3.0×).
+- News triggers: wired + firing on scan cadence (no breaking headlines in the current feed, so no trigger fired yet — will activate when news breaks).
+- VLM: dashboard 7/10 (sparkline label improved).
+
+## Unresolved / next-phase recommendations
+- News triggers run on the 15-min scan cadence. Could be moved to every 60s tick for sub-minute breaking-news response (needs a short RSS cache to stay free-tier-safe). Currently acceptable — force-run queue is processed every tick, so queued assets analyze within 60s of the trigger firing.
+- Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
+- Next cron could: (a) add a self-tune history mini-chart showing threshold evolution over time, (b) wire on-chain hashrate-trend as a consensus fundamental layer, (c) add a "triggered by" badge on signals that were force-run'd by a news/cross-asset trigger (traceability), (d) move news triggers to every-tick with a 5-min RSS cache for faster breaking-news response.

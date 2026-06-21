@@ -62,6 +62,15 @@ export interface BrainStats {
   startedAt: number;
 }
 
+/** A point-in-time sample of the token economy — powers the savings sparkline. */
+export interface StatsSample {
+  ts: number;
+  tokensUsed: number;
+  tokensSaved: number;
+  llmCalls: number;
+  skips: number;
+}
+
 export interface BrainConfig {
   // Gate thresholds. Tuned for a free stack: be lazy by default, only spend
   // an LLM call when deterministic math is undecided OR something is happening.
@@ -110,9 +119,13 @@ interface BrainStateInternal {
   // Manual override queue: symbols the operator force-ran. Processed even when
   // the autonomous brain is paused, and always at deep tier (bypass the gate).
   forceRunQueue: Set<string>;
+  // Token-economy timeline samples — one per tick, ring-buffered (capped) so
+  // the savings sparkline has history without unbounded memory growth.
+  statsSamples: StatsSample[];
 }
 
 const g = globalThis as unknown as { __omniscientBrain?: BrainStateInternal };
+const MAX_SAMPLES = 120; // ~2h of 60s ticks — enough for a meaningful sparkline
 
 function freshState(): BrainStateInternal {
   const now = Date.now();
@@ -127,12 +140,19 @@ function freshState(): BrainStateInternal {
     recentActions: [],
     hydrated: false,
     forceRunQueue: new Set(),
+    statsSamples: [],
   };
 }
 
 function state(): BrainStateInternal {
   if (!g.__omniscientBrain) g.__omniscientBrain = freshState();
-  return g.__omniscientBrain;
+  // Hot-reload migration: if the cached state predates a new field (e.g.
+  // statsSamples added later), backfill it so the running dev server doesn't
+  // crash on a stale singleton. Each new field needs a one-line guard here.
+  const s = g.__omniscientBrain;
+  if (!s.statsSamples) s.statsSamples = [];
+  if (!s.forceRunQueue) s.forceRunQueue = new Set();
+  return s;
 }
 
 // Hydration: pull persisted control flags from the Setting KV on first use.
@@ -276,6 +296,28 @@ export function tickStarted(): void {
   s.stats.ticksTotal++;
   s.stats.lastTickAt = Date.now();
 }
+
+/**
+ * Snapshot the current cumulative stats into the timeline ring buffer. Called
+ * once per tick (at the end of tickStarted's sibling, by the scheduler) so the
+ * savings sparkline has a fresh point every minute. Capped at MAX_SAMPLES.
+ */
+export function recordSample(): void {
+  const s = state();
+  s.statsSamples.push({
+    ts: Date.now(),
+    tokensUsed: s.stats.tokensUsed,
+    tokensSaved: s.stats.tokensSaved,
+    llmCalls: s.stats.llmCallsTotal,
+    skips: s.stats.llmCallsSkipped + s.stats.budgetSkips,
+  });
+  if (s.statsSamples.length > MAX_SAMPLES) s.statsSamples.shift();
+}
+
+/** The token-economy timeline — newest last. Empty until the first tick. */
+export function getSamples(): StatsSample[] {
+  return state().statsSamples;
+}
 export function recordLlmCall(tokens: number): void {
   const s = state();
   s.stats.llmCallsTotal++;
@@ -325,6 +367,7 @@ export function snapshot() {
     budget: { cap: s.config.budgetCap, used: s.budgetUsed, remaining: budgetRemaining(), windowMs: s.config.budgetWindowMs, windowStart: s.budgetWindowStart },
     llm: { inCooldown: llmInCooldown(), cooldownUntil: llmCooldownUntilTs(), consecutiveFailures: llmConsecutiveFailures },
     stats: s.stats,
+    samples: s.statsSamples,
     watch: allWatch(),
     recentActions: s.recentActions,
   };

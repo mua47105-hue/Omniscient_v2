@@ -20,12 +20,13 @@ import { getSetting, setSetting, SETTING_KEYS } from '@/lib/config/settings';
 import {
   hydrate, isRunning, tickStarted, getWatch, setWatch, getConfig, budgetExhausted,
   recordSkip, recordCacheHit, recordBudgetSkip, recordLlmCall, recordAlert, recordAction,
-  recordLlmFailure, recordLlmSuccess, llmInCooldown,
+  recordLlmFailure, recordLlmSuccess, llmInCooldown, recordSample,
   consumeForceRunQueue, type AssetWatch,
 } from '@/lib/brain/state';
 import { gateDecide } from '@/lib/brain/engine';
 import { selfTune } from '@/lib/brain/selftune';
 import { checkCrossAssetTriggers } from '@/lib/brain/triggers';
+import { checkNewsTriggers } from '@/lib/brain/news-triggers';
 import type { ApiResult, TechnicalIndicators, OrderBook, Ticker } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -358,6 +359,7 @@ export async function POST(req: NextRequest) {
     const jobs = await db.scheduleJob.findMany({ where: { enabled: true } });
     const due = jobs.filter((j) => forceModule ? j.moduleKey === forceModule : isDue(j));
     if (due.length === 0) {
+      recordSample(); // keep the timeline continuous even on no-op ticks
       return NextResponse.json<ApiResult<{ ran: any[]; skipped: true; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; forced: typeof forcedSummary }>>({ success: true, data: { ran: [], skipped: true, grading: gradingSummary, priceAlerts: priceAlertSummary, forced: forcedSummary } });
     }
 
@@ -397,6 +399,20 @@ export async function POST(req: NextRequest) {
       }
     } catch { /* best-effort */ }
 
+    // News-event triggers: scan fresh crypto-news RSS for market-moving
+    // headlines (hack/ETF/regulation/…) and queue mentioned assets for
+    // re-analysis. Free + tokenless — the only trigger that fires on external
+    // events rather than price action. Runs every tick (RSS is cached cheaply).
+    let newsTriggerSummary: { triggered: number; queued: number; headlines: number } | null = null;
+    try {
+      if (isRunning()) {
+        const nt = await checkNewsTriggers();
+        if (nt.triggered) {
+          newsTriggerSummary = { triggered: 1, queued: nt.queuedAssets.length, headlines: nt.matchedHeadlines.length };
+        }
+      }
+    } catch { /* best-effort — news never blocks the tick */ }
+
     // Self-tuning: read recent graded signals and nudge gate thresholds toward
     // better calibration. Conservative (needs ≥12 grades, max ±2 nudge, bounded).
     let tuneSummary: any = null;
@@ -413,7 +429,10 @@ export async function POST(req: NextRequest) {
       console.log(`[supabase-sync] Auto-synced ${syncResult.totalSynced} rows in ${syncResult.durationMs}ms`);
     } catch { /* non-fatal */ }
 
-    return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary; triggers: typeof triggerSummary; tune: typeof tuneSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary, triggers: triggerSummary, tune: tuneSummary } });
+    // Record a token-economy timeline sample so the savings sparkline stays fresh.
+    recordSample();
+
+    return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary; triggers: typeof triggerSummary; newsTriggers: typeof newsTriggerSummary; tune: typeof tuneSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary, triggers: triggerSummary, newsTriggers: newsTriggerSummary, tune: tuneSummary } });
   } catch (e: any) {
     return NextResponse.json<ApiResult<never>>({ success: false, error: e.message }, { status: 500 });
   }
