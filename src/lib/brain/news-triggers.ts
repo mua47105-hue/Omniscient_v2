@@ -13,7 +13,7 @@
 // "SEC sues Binance" or "BlackRock ETF approved" and wake the brain up.
 
 import https from 'node:https';
-import { forceRun, recordAction } from '@/lib/brain/state';
+import { forceRun, recordAction, recordTrigger } from '@/lib/brain/state';
 
 const UA = 'Mozilla/5.0 (compatible; OMNISCIENT/1.0)';
 
@@ -167,6 +167,7 @@ export async function checkNewsTriggers(maxAgeMs = 60 * 60 * 1000): Promise<News
   if (queuedAssets.size > 0) {
     const symbols = Array.from(queuedAssets);
     for (const s of symbols) forceRun(s, 'news');
+    recordTrigger('news');
     recordAction({
       symbol: 'NEWS→TRIGGER',
       action: 'news-event',

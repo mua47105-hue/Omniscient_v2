@@ -4,12 +4,13 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Flame, Gauge, MessageSquare, TrendingUp, ExternalLink, Boxes } from 'lucide-react';
+import { Flame, Gauge, MessageSquare, TrendingUp, ExternalLink, Boxes, GitCommit } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface TrendingCoin { rank: number; coinId: string; symbol: string; name: string; marketCapRank: number | null; priceBtc: number; score: number; }
 interface FearGreed { value: number; classification: string; timestamp: number; }
 interface OnChainStats { txCount24h: number; hashRate: number; difficulty: number; fetchedAt: number; }
+interface RepoActivity { asset: string; label: string; repo: string; stars: number; commits7d: number; lastPush: string | null; }
 
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url, { cache: 'no-store' });
@@ -31,21 +32,23 @@ export function FreeSignalsCard() {
   const fgQ = useQuery({ queryKey: ['fg-brain'], queryFn: () => fetchJson<FearGreed>(`/api/macro/fear-greed`), refetchInterval: 15 * 60 * 1000, retry: 1 });
   const redditQ = useQuery({ queryKey: ['reddit-sentiment'], queryFn: () => fetchJson<{ available: boolean; aggregate?: { score: number; label: string; postsAnalyzed: number; bullishHits: number; bearishHits: number }; reason?: string }>(`/api/sentiment/reddit`), refetchInterval: 10 * 60 * 1000, retry: 1 });
   const onchainQ = useQuery({ queryKey: ['onchain'], queryFn: () => fetchJson<OnChainStats>(`/api/onchain/stats`), refetchInterval: 15 * 60 * 1000, retry: 1 });
+  const devQ = useQuery({ queryKey: ['devactivity'], queryFn: () => fetchJson<RepoActivity[]>(`/api/devactivity`), refetchInterval: 30 * 60 * 1000, retry: 1 });
 
   const trending = trendingQ.data ?? [];
   const fg = fgQ.data;
   const reddit = redditQ.data;
   const onchain = onchainQ.data;
+  const dev = devQ.data ?? [];
 
   return (
     <Card className="border-border/60 ring-1 ring-inset ring-border/30">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center gap-2">
           <Flame className="h-4 w-4 text-amber-400" /> Free Data Sources
-          <span className="text-[10px] font-normal text-muted-foreground ml-1">zero-token signals</span>
+          <span className="text-[10px] font-normal text-muted-foreground ml-1">zero-token signals · 5 free sources</span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {/* Trending */}
         <div>
           <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
@@ -137,6 +140,33 @@ export function FreeSignalsCard() {
               <OnChainRow label="24h Txns" value={onchain.txCount24h.toLocaleString()} hint="network demand" accent="text-emerald-400" />
               <OnChainRow label="Difficulty" value={`${(onchain.difficulty / 1e12).toFixed(1)}T`} hint="security budget" accent="text-violet-400" />
             </div>
+          )}
+        </div>
+
+        {/* GitHub dev-activity — commit count for flagship crypto repos */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
+            <GitCommit className="h-3.5 w-3.5" /> Dev Activity
+          </div>
+          {devQ.isLoading ? (
+            <div className="h-[170px] space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-6 rounded bg-muted/40 animate-pulse" />)}</div>
+          ) : dev.length === 0 ? (
+            <div className="text-xs text-muted-foreground/60 py-4 text-center h-[170px] flex items-center justify-center">Unavailable</div>
+          ) : (
+            <ScrollArea className="h-[170px]">
+              <div className="space-y-0.5 pr-2">
+                {dev.map((r) => (
+                  <div key={r.repo} className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-muted/30 transition-colors">
+                    <span className="text-xs font-bold w-8 shrink-0">{r.asset}</span>
+                    <span className="text-[10px] text-muted-foreground flex-1 truncate">{r.label}</span>
+                    <Badge variant="outline" className={cn('text-[9px] py-0', r.commits7d > 30 ? 'text-emerald-400 border-emerald-500/30' : r.commits7d > 10 ? 'text-amber-400' : 'text-muted-foreground')}>
+                      {r.commits7d}c
+                    </Badge>
+                  </div>
+                ))}
+                <div className="text-[9px] text-muted-foreground/60 pt-1.5 text-center">commits / 7d</div>
+              </div>
+            </ScrollArea>
           )}
         </div>
       </CardContent>

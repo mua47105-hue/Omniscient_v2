@@ -239,3 +239,34 @@ Task: QA + trigger traceability (signals "triggered by" badge) + brain header el
 - Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
 - News/cross-asset triggers will stamp their source on signals the moment they fire — traceability is now ready for when triggers activate.
 - Next cron could: (a) GitHub dev-activity source, (b) self-tune history mini-chart, (c) wire on-chain hashrate-trend as a consensus fundamental, (d) a "trigger stats" tile on the brain page (count of news/cross-asset/manual triggers fired).
+
+---
+Task ID: 7
+Agent: main (15-min cron review #5)
+Task: QA + GitHub dev-activity free source + trigger-stats tile + FreeSignalsCard 5-column layout.
+
+## Current project status (assessment)
+- App + scheduler both alive (dev:3000, scheduler:3042, 68/72 ticks ok — lastErr: none). Brain running, auto mode. Lint clean, no runtime errors. All 9 pages render 200.
+- QA via agent-browser + VLM: brain page healthy. VLM flagged FreeSignalsCard column imbalance (4 cols uneven) + suggested refresh timestamps. totalGraded still 0 (signals need 24h).
+
+## Completed modifications
+1. **GitHub dev-activity free data source** (`src/lib/market/devactivity.ts` + `/api/devactivity`): free GitHub API (no key, 60 req/hr anonymous). Fetches commit count (7d) + stars + last push for 5 flagship crypto repos (bitcoin/bitcoin, ethereum, solana, chainlink, cardano). Cached 30 min. Verified live: BTC 44 commits/89k★, ETH 100, LINK 35, ADA 11. Zero tokens, zero API key.
+2. **5th column in FreeSignalsCard** (`src/components/brain/FreeSignalsCard.tsx`): "Dev Activity" column with per-repo commit badges (emerald >30, amber >10, muted else). Grid upgraded to `md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5` for balanced layout. Card title now "5 free sources".
+3. **Trigger-stats tile** (`src/lib/brain/state.ts` + BrainPanel): new BrainStats fields `triggersNews/triggersCrossAsset/triggersManual`. `recordTrigger(source)` function called from news-triggers, cross-asset triggers, + manual brain-API forceRun. New "Triggers Fired" scoreboard tile (fuchsia accent) showing total + breakdown subtext. Scoreboard grid → xl:grid-cols-6. VLM: 9/10 ("balanced, scannable, cohesive").
+4. **UI polish**: 6-tile scoreboard balanced, trigger tile with breakdown subtext, dev-activity column with semantic color coding.
+
+## Bug fixed
+5. **Hot-reload nested-stats backfill**: trigger counters showed `null` after hot-reload because the `state()` migration guard only backfilled top-level state fields, not nested stats fields. FIX: added guards `if (s.stats.triggersNews == null) s.stats.triggersNews = 0` (×3) for the new nested stats. Lesson: nested-object field additions need their own backfill guards on the parent object (don't reset the whole stats object — would lose ticksTotal/tokensUsed).
+6. **Dev-server state corruption**: after multiple hot-reloads the brain singleton's stats object got into an inconsistent state where the guard ran but didn't persist across module re-instantiation. A clean dev-server restart resolved it (fresh `globalThis`). Production won't hit this (no hot-reload).
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 68/72 ok (lastErr: none). Pages: / /brain /crypto /signals /macro /news /settings all 200.
+- agent-browser: brain scoreboard renders all 6 tiles (Tokens Used, Saved, Cache Hits, Skips, Win Rate, Triggers Fired); FreeSignalsCard renders 5 columns (CoinGecko, Fear&Greed, Reddit, On-Chain, Dev Activity) with "5 free sources" label.
+- Trigger counter verified: force-run BTC → `triggersManual: 1`.
+- devactivity API: returns live data (BTC 44 commits, ETH 100, etc.).
+- VLM: scoreboard 9/10 ("balanced, scannable, cohesive design").
+
+## Unresolved / next-phase recommendations
+- Self-tuning still data-starved (needs 24h for first grades). Will activate autonomously.
+- News/cross-asset triggers will fire + count when their conditions are met (breaking news / volatile anchor). Counter ready.
+- Next cron could: (a) self-tune history mini-chart showing threshold evolution, (b) wire on-chain hashrate-trend as a consensus fundamental layer, (c) add refresh timestamps to each FreeSignalsCard column, (d) move news triggers to every-tick (60s) with a 5-min RSS cache for sub-minute breaking-news response, (e) add a "dev-activity delta" — compare this week's commits to last week's as a trend signal.

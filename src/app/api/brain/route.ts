@@ -3,7 +3,7 @@
 // POST → { action: pause|resume|setMode|setConfig|forceRun|resetBudget, ... }
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  hydrate, snapshot, setRunning, setMode, setConfig, forceRun, resetBudget,
+  hydrate, snapshot, setRunning, setMode, setConfig, forceRun, resetBudget, recordTrigger,
   type BrainConfig,
 } from '@/lib/brain/state';
 import type { ApiResult } from '@/lib/types';
@@ -42,8 +42,10 @@ export async function POST(req: NextRequest) {
         break;
       }
       case 'forceRun':
-        if (typeof body.symbol === 'string' && body.symbol.trim()) forceRun(body.symbol.trim(), 'manual');
-        else return NextResponse.json<ApiResult<never>>({ success: false, error: 'symbol required' }, { status: 400 });
+        if (typeof body.symbol === 'string' && body.symbol.trim()) {
+          forceRun(body.symbol.trim(), 'manual');
+          recordTrigger('manual');
+        } else return NextResponse.json<ApiResult<never>>({ success: false, error: 'symbol required' }, { status: 400 });
         break;
       case 'resetBudget':
         resetBudget();

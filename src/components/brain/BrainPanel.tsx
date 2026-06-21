@@ -39,6 +39,7 @@ interface BrainStats {
   ticksTotal: number; llmCallsTotal: number; llmCallsSkipped: number; cacheHits: number;
   budgetSkips: number; tokensUsed: number; tokensSaved: number; alertsSent: number;
   lastTickAt: number | null; startedAt: number;
+  triggersNews: number; triggersCrossAsset: number; triggersManual: number;
 }
 interface BrainConfig {
   minNoteworthiness: number; highNoteworthiness: number; unanimousConviction: number;
@@ -246,7 +247,7 @@ export function BrainPanel() {
       </Card>
 
       {/* Token economy scoreboard */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         <StatTile icon={<Coins className="h-4 w-4" />} label="Tokens Used" value={fmt(stats?.tokensUsed ?? 0)} accent="text-sky-400" sub={`${stats?.llmCallsTotal ?? 0} LLM calls`} />
         <StatTile icon={<TrendingDown className="h-4 w-4" />} label="Tokens Saved" value={fmt(stats?.tokensSaved ?? 0)} accent="text-emerald-400" sub={`${savedPct.toFixed(0)}% of gross`} />
         <StatTile icon={<Database className="h-4 w-4" />} label="Cache Hits" value={`${stats?.cacheHits ?? 0}`} accent="text-violet-400" sub="reused verdicts" />
@@ -257,6 +258,15 @@ export function BrainPanel() {
           value={winRateQ.data?.totalGraded ? `${(winRateQ.data.accuracy * 100).toFixed(0)}%` : '—'}
           accent={winRateQ.data?.accuracy != null && winRateQ.data.accuracy >= 0.5 ? 'text-emerald-400' : 'text-rose-400'}
           sub={winRateQ.data?.totalGraded ? `${winRateQ.data.totalGraded} graded · self-tunes` : 'awaiting grades'}
+        />
+        {/* Trigger stats — autonomy volume. Sums news + cross-asset + manual
+            triggers fired, with the breakdown in the subtext. */}
+        <StatTile
+          icon={<Sparkles className="h-4 w-4" />}
+          label="Triggers Fired"
+          value={`${(stats?.triggersNews ?? 0) + (stats?.triggersCrossAsset ?? 0) + (stats?.triggersManual ?? 0)}`}
+          accent="text-fuchsia-400"
+          sub={`${stats?.triggersNews ?? 0} news · ${stats?.triggersCrossAsset ?? 0} x-asset · ${stats?.triggersManual ?? 0} manual`}
         />
       </div>
 

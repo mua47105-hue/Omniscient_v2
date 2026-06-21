@@ -60,6 +60,10 @@ export interface BrainStats {
   alertsSent: number;
   lastTickAt: number | null;
   startedAt: number;
+  // Autonomy trigger counts — how many times each trigger type has fired.
+  triggersNews: number;
+  triggersCrossAsset: number;
+  triggersManual: number;
 }
 
 /** A point-in-time sample of the token economy — powers the savings sparkline. */
@@ -134,7 +138,7 @@ function freshState(): BrainStateInternal {
     mode: 'auto',
     config: { ...DEFAULT_CONFIG },
     watch: new Map(),
-    stats: { ticksTotal: 0, llmCallsTotal: 0, llmCallsSkipped: 0, cacheHits: 0, budgetSkips: 0, tokensUsed: 0, tokensSaved: 0, alertsSent: 0, lastTickAt: null, startedAt: now },
+    stats: { ticksTotal: 0, llmCallsTotal: 0, llmCallsSkipped: 0, cacheHits: 0, budgetSkips: 0, tokensUsed: 0, tokensSaved: 0, alertsSent: 0, lastTickAt: null, startedAt: now, triggersNews: 0, triggersCrossAsset: 0, triggersManual: 0 },
     budgetUsed: 0,
     budgetWindowStart: now,
     recentActions: [],
@@ -153,6 +157,11 @@ function state(): BrainStateInternal {
   const s = g.__omniscientBrain;
   if (!s.statsSamples) s.statsSamples = [];
   if (!(s.forceRunQueue instanceof Map)) s.forceRunQueue = new Map();
+  // Nested stats fields added later — backfill on the existing stats object
+  // rather than resetting it (which would lose ticksTotal/tokensUsed).
+  if (s.stats.triggersNews == null) s.stats.triggersNews = 0;
+  if (s.stats.triggersCrossAsset == null) s.stats.triggersCrossAsset = 0;
+  if (s.stats.triggersManual == null) s.stats.triggersManual = 0;
   return s;
 }
 
@@ -343,6 +352,14 @@ export function recordBudgetSkip(estimatedSavedTokens: number): void {
 }
 export function recordAlert(): void {
   state().stats.alertsSent++;
+}
+
+/** Record an autonomy trigger firing — counts by source for the trigger-stats tile. */
+export function recordTrigger(source: 'news' | 'cross-asset' | 'manual'): void {
+  const s = state();
+  if (source === 'news') s.stats.triggersNews++;
+  else if (source === 'cross-asset') s.stats.triggersCrossAsset++;
+  else s.stats.triggersManual++;
 }
 export function recordAction(a: Omit<BrainAction, 'ts'>): void {
   const s = state();
