@@ -1,0 +1,289 @@
+// OMNISCIENT — Global Market Intelligence System
+// Prisma schema — used for LOCAL DEV (SQLite).
+//
+// For PRODUCTION cloud persistence, use the Supabase integration in the
+// dashboard (Settings → Supabase). The dashboard stores your Supabase Project
+// URL + anon key in the Setting table and generates the matching PostgreSQL
+// SQL schema for you to run in the Supabase SQL Editor. The Supabase client
+// (src/lib/supabase/client.ts) reads/writes directly via the PostgREST API —
+// no Prisma migration needed for production.
+//
+// JSON is stored as String (TEXT) and parsed in code — keeps the schema
+// identical across SQLite (Prisma dev) and PostgreSQL (Supabase prod).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// LLM PROVIDERS & MODELS — the heart of "manually add everything"
+// ---------------------------------------------------------------------------
+
+model LlmProvider {
+  id           String   @id @default(cuid())
+  name         String   @unique // e.g. "Gemini", "Groq", "NVIDIA NIM", "Mistral", "OpenRouter"
+  baseUrl      String   // e.g. https://generativelanguage.googleapis.com/v1beta/openai
+  apiKey       String   // stored as provided (encrypt in prod)
+  isActive     Boolean  @default(true)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  models       LlmModel[]
+  moduleConfigs ModuleModelConfig[]
+}
+
+model LlmModel {
+  id            String   @id @default(cuid())
+  providerId    String
+  provider      LlmProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  modelId       String   // e.g. "gemini-2.0-flash", "llama-3.3-70b-versatile"
+  displayName   String
+  contextWindow Int      @default(128000)
+  freeTierRpm   Int      @default(10)
+  isActive      Boolean  @default(true)
+  capabilities  String   @default("text") // JSON: ["text","vision","json"]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([providerId, modelId])
+  moduleConfigs ModuleModelConfig[]
+}
+
+// Which model runs which analysis layer for which module
+model ModuleModelConfig {
+  id           String   @id @default(cuid())
+  moduleKey    String   // e.g. "crypto_technical", "news_sentiment", "macro"
+  layer        String   // e.g. "technical", "sentiment", "fundamental", "deep_reasoning"
+  modelId      String
+  model        LlmModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  providerId   String
+  provider     LlmProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  temperature  Float    @default(0.3)
+  systemPrompt String?
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([moduleKey, layer])
+}
+
+// ---------------------------------------------------------------------------
+// ASSETS & WATCHLISTS
+// ---------------------------------------------------------------------------
+
+model Asset {
+  id        String   @id @default(cuid())
+  symbol    String   @unique // e.g. "BTCUSDT", "EUR/USD", "XAU", "DXY", "RELIANCE.NS"
+  name      String
+  assetClass String  // crypto | forex | commodity | index | stock
+  exchange  String?  // binance, nse, nyse, ...
+  meta      String   @default("{}") // JSON blob
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snapshots DataSnapshot[]
+  signals   Signal[]
+}
+
+model Watchlist {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  assetClass String? // crypto | forex | ... or null for mixed
+  symbols   String   @default("[]") // JSON string array of symbol ids
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// DATA SNAPSHSHOTS — raw inputs we keep for grading/memory
+// ---------------------------------------------------------------------------
+
+model DataSnapshot {
+  id        String   @id @default(cuid())
+  assetId   String
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  timestamp DateTime @default(now())
+  layer     String   // technical | orderbook | onchain | sentiment | macro | fundamental | intermarket
+  source    String   // binance | coingecko | finnhub | gdelt ...
+  payload   String   // JSON blob with the actual data
+}
+
+// ---------------------------------------------------------------------------
+// SIGNALS — the output of the consensus engine
+// ---------------------------------------------------------------------------
+
+model Signal {
+  id           String   @id @default(cuid())
+  assetId      String
+  asset        Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  timestamp    DateTime @default(now())
+  direction    String   // long | short | neutral
+  conviction   Int      // 0-100
+  timeframe    String   @default("4h") // 1h | 4h | 1d | 1w
+  layersSummary String  @default("{}") // JSON: per-layer scores
+  modelsUsed   String   @default("[]") // JSON: which models contributed
+  entryPrice   Float?
+  stopLoss     Float?
+  takeProfit   Float?
+  rationale    String   // human-readable LLM summary
+  status       String   @default("open") // open | closed | expired
+  expiresAt    DateTime?
+
+  outcomes     SignalOutcome[]
+  alerts       Alert[]
+}
+
+model SignalOutcome {
+  id        String   @id @default(cuid())
+  signalId  String
+  signal    Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  horizon   String   // 1h | 1d | 1w
+  expected  String   // long | short
+  actual    String?  // long | short | flat
+  pnlPct    Float?
+  grade     String?  // correct | wrong | partial
+  gradedAt  DateTime?
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// ALERTS
+// ---------------------------------------------------------------------------
+
+model Alert {
+  id        String   @id @default(cuid())
+  signalId  String?
+  signal    Signal?  @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  channel   String   // telegram | email | discord
+  status    String   @default("pending") // pending | sent | failed
+  payload   String   @default("{}") // JSON
+  sentAt    DateTime?
+  error     String?
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// PRICE ALERTS — user-defined threshold alerts on any asset
+// ---------------------------------------------------------------------------
+
+model PriceAlert {
+  id           String   @id @default(cuid())
+  assetSymbol  String   // e.g. "BTCUSDT", "EURUSD", "RELIANCE.NS"
+  condition    String   // "above" | "below" | "crosses_up" | "crosses_down"
+  targetPrice  Float
+  currentPrice Float?   // last checked price (also serves as lastCheckedPrice for crosses_* conditions)
+  status       String   @default("active") // "active" | "triggered" | "disabled"
+  channel      String   @default("dashboard") // "dashboard" | "telegram" | "both"
+  note         String?
+  triggeredAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([assetSymbol])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// NEWS
+// ---------------------------------------------------------------------------
+
+model NewsItem {
+  id         String   @id @default(cuid())
+  source     String   // gdelt | finnhub | cryptopanic | rss
+  url        String?
+  title      String
+  body       String?
+  publishedAt DateTime
+  sentiment  Float?   // -1 to 1
+  impact     String?  // low | medium | high
+  assetsTagged String @default("[]") // JSON
+  analyzed   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([publishedAt])
+  @@index([source])
+}
+
+// ---------------------------------------------------------------------------
+// IPO / ICO
+// ---------------------------------------------------------------------------
+
+model IpoIcoItem {
+  id        String   @id @default(cuid())
+  type      String   // ipo | ico
+  name      String
+  symbol    String?
+  date      DateTime?
+  exchange  String?
+  details   String   @default("{}") // JSON
+  analysis  String?
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// REPORTS
+// ---------------------------------------------------------------------------
+
+model Report {
+  id        String   @id @default(cuid())
+  type      String   // daily | weekly | monthly
+  period    String   // e.g. "2025-01" or "2025-01-15"
+  title     String
+  contentMd String
+  createdAt DateTime @default(now())
+
+  @@unique([type, period])
+}
+
+// ---------------------------------------------------------------------------
+// PORTFOLIO HOLDINGS — user-recorded positions for the portfolio tracker
+// ---------------------------------------------------------------------------
+
+model PortfolioHolding {
+  id          String   @id @default(cuid())
+  assetSymbol String   // e.g. "BTCUSDT", "EURUSD", "AAPL"
+  quantity    Float
+  entryPrice  Float
+  entryDate   DateTime @default(now())
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([assetSymbol])
+}
+
+// ---------------------------------------------------------------------------
+// SCHEDULER JOBS
+// ---------------------------------------------------------------------------
+
+model ScheduleJob {
+  id        String   @id @default(cuid())
+  moduleKey String   @unique
+  cronExpr  String   // e.g. "*/15 * * * *"
+  enabled   Boolean  @default(true)
+  lastRunAt DateTime?
+  nextRunAt DateTime?
+  lastStatus String? // success | error
+  lastError  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// SETTINGS — global KV
+// ---------------------------------------------------------------------------
+
+model Setting {
+  id    String  @id @default(cuid())
+  key   String  @unique
+  value String  // JSON-encoded value
+  updatedAt DateTime @updatedAt
+}
