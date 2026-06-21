@@ -24,6 +24,7 @@ import { Sparkline } from '@/components/brain/Sparkline';
 import { ThinkingIndicator } from '@/components/brain/ThinkingIndicator';
 import { TriggerBreakdown } from '@/components/brain/TriggerBreakdown';
 import { SavedAreaChart } from '@/components/brain/SavedAreaChart';
+import { EdgeSourcesCard } from '@/components/brain/EdgeSourcesCard';
 
 // ---- Types mirroring src/lib/brain/state.ts ----
 interface AssetWatch {
@@ -533,6 +534,10 @@ export function BrainPanel() {
       </p>
 
       <FreeSignalsCard />
+
+      {/* Edge Sources — research-backed signal layers from the Field Guide to
+          Real Edge (Vol. 2). E4 derivatives-v2 regime + E8 asymmetric F&G. */}
+      <EdgeSourcesCard />
     </div>
   );
 }

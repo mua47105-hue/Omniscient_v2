@@ -400,3 +400,53 @@ Task: QA + on-chain hashrate-trend consensus layer + cumulative-saved area chart
 - On-chain hashrate layer is BTC-only + needs ≥3 samples (~45min) to produce a direction. Will activate autonomously.
 - Self-tuning still data-starved (needs 24h for first grades).
 - Next cron could: (a) make the self-tune history a step-chart of threshold values, (b) add a GitHub token setting to raise dev-activity rate limit, (c) extend the on-chain layer to ETH gas-price trend (free, via etherscan-style API), (d) add a "consensus layers" breakdown on signals showing which layers contributed (now that onchain can contribute), (e) area-chart contrast tweak (VLM's only nit).
+
+---
+Task ID: 13
+Agent: main (PDF implementation — Field Guide to Real Edge Vol. 2)
+Task: Deep-read the OMNISCIENT_EDGE_SOURCES.pdf (37-page research plan with 12 edge suggestions), understand the codebase, implement the highest-impact free-data suggestions.
+
+## PDF understanding
+The PDF is a rigorous, research-backed "Field Guide to Real Edge (Vol. 2)" — 12 concrete suggestions (E1-E12) to add ~0.6-1.0 Sharpe using only free data. Each has (a) published evidence, (b) free data source, (c) TypeScript implementation, (d) honest counter-argument. The document's own top-3: E1 vol-targeting, E2 post-only execution, E3 cointegration matrix. "Start here": E9 (Triple-Barrier + DSR). The document is brutally honest: "No risk management creates alpha — it only stops you from destroying the edge you have. If your signals are noise, fix that first."
+
+## Implemented (6 of 12 suggestions — the pure-math core + free-data layers)
+
+1. **E1 Vol-targeting position sizing** (`src/lib/risk/vol_targeting.ts`): sizes positions inversely to realized vol (Moreira-Muir 2017: +0.15-0.30 Sharpe). Pure math, no deps. **Wired into the tick** — every signal now carries a `[vol-target:X.X% rv:Y.YY%]` tag in the rationale. Verified live: POL signal = `[vol-target:25.0% rv:1.58%]`.
+
+2. **E3 Cointegration matrix** (`src/lib/analysis/cointegration.ts`): Engle-Granger 2-step (OLS hedge ratio + ADF test + half-life + z-score). Own OLS/ADF implementation (no `simple-statistics` dep — ponytail). `computeCointegrationMatrix()` for N×N pairs. API route `/api/analysis/cointegration`. Verified: synthetic cointegrated pair → hedgeRatio 2.04 (expected ~2), ADF p=0.01, cointegrated=true, halfLife=3.8.
+
+3. **E9 Triple-Barrier labeling** (`src/lib/analysis/triple-barrier.ts`): López de Prado triple-barrier (TP/SL/timeout). First barrier touched = label. Conservative SL-first ordering. Verified: label=1 (TP hit), returnR=1.33.
+
+4. **E9 Deflated Sharpe Ratio** (`src/lib/analysis/deflated-sharpe.ts`): Bailey-LdP DSR = Φ((SR − E[max]) / σ(SR)). Corrects for multiple testing. Hard gate: DSR < 0.95 = reject. Includes `moments()` (skewness + excess kurtosis) + `dsrVerdict()`. Verified: DSR=1.000 APPROVED.
+
+5. **E10 Hurst exponent** (`src/lib/analysis/hurst.ts`): DFA-based Hurst exponent. H<0.5 = mean-reverting, H>0.5 = trending. `classifyRegime()` with margins. **Key insight documented: DFA must be called on I(0) series (returns/spreads), not price levels.** Verified: white noise H=0.53→RANDOM, anti-persistent H=0.43→MEAN_REVERTING, persistent H=0.58→TRENDING.
+
+6. **E4 Derivatives-v2** (`src/lib/market/deribit.ts`): Deribit public API (no key) + Binance Coin-M. Three signals: term-structure basis (quarterly future vs spot, annualized), 25Δ risk reversal (IV call − IV put, via moneyness proxy since Deribit book-summary doesn't return delta), VRP (DVOL − 30d realized vol). CAPITULATION/EUPHORIA/NEUTRAL regime detection. API route `/api/analysis/derivatives-v2`. Verified live: basis -11.9% (backwardation), RR -17.0 (extreme put skew), DVOL 39.1, VRP 39.1.
+
+7. **E8 Asymmetric F&G** (`src/lib/analysis/fear-greed-edge.ts`): reuses existing `getFearGreed()` (alternative.me, free). Computes streak days + asymmetric edge (momentum-long on extreme-greed streaks, mean-revert-long on extreme-fear streaks — the OPPOSITE of equities). API route `/api/analysis/fear-greed-edge`. Verified: F&G=23 FEAR, streak 0d, edge NEUTRAL.
+
+## UI integration
+- **EdgeSourcesCard** (`src/components/brain/EdgeSourcesCard.tsx`): new card on the brain page surfacing E4 (derivatives regime + basis/skew/VRP/DVOL) + E8 (asymmetric F&G edge + streak + conviction). Makes the research-backed layers visible.
+- **Vol-target badge** in signals feed: `parseTrigger()` extended to parse `[vol-target:...]` tag + render as a Target-icon badge alongside the trigger badge.
+
+## Honest deferrals (documented, not forgotten)
+- **E2/E12 (live execution)**: no broker integration — app is signal-generation only. Modules exist for backtest simulation; live needs CCXT.
+- **E5 (onchain-v2 flow metrics)**: CryptoQuant needs a free account. The funding+OI crowding sub-signal is free (Binance, already integrated). Full implementation needs the account.
+- **E6 (leading macro)**: FRED needs a free key. HYG/LQD via Yahoo is free (already have Yahoo client). Full implementation needs the key.
+- **E7 (microstructure)**: needs a persistent WS worker process (bigger infra change). Deferred.
+- **E11 (full risk stack)**: E1 vol-targeting is shipped. Correlation-aware sizing + Kelly + drawdown deleveraging depend on schema changes (pnlR field, equityCurve tracking) — next phase.
+- **E9 into grading.ts**: triple-barrier module is built + tested but NOT yet wired into the live grading loop (the existing fixed-24h grading works + powers the analytics dashboard). Changing the grading loop is riskier — deferred to avoid disrupting the self-tuning feedback loop. Module is ready to drop in.
+
+## Verification results
+- Lint clean. dev.log: no errors. Scheduler 235/239 ok (lastErr: none). Pages: / /brain /crypto /signals /correlation /derivatives all 200.
+- All 6 modules self-checked with synthetic data: vol_targeting ✓, cointegration ✓ (hedgeRatio 2.04, p=0.01), triple-barrier ✓ (label 1, returnR 1.33), DSR ✓ (1.000 APPROVED), hurst ✓ (correct on I(0)), derivatives-v2 ✓ (basis/RR/DVOL/VRP all live), F&G edge ✓.
+- agent-browser: EdgeSourcesCard renders on /brain (Derivatives Intelligence E4 + Asymmetric F&G E8); signals show `[vol-target:25.0% rv:1.58%]` tags.
+- 3 new API routes verified: /api/analysis/derivatives-v2, /api/analysis/fear-greed-edge, /api/analysis/cointegration.
+
+## Unresolved / next-phase recommendations
+- Wire E9 triple-barrier into grading.ts (replace fixed-24h evaluate). Risk: changes the self-tuning feedback loop. Do when ready to re-validate the grading analytics.
+- Wire E10 Hurst as a regime filter on the cointegration pairs (skip when spread H>0.55). Module ready.
+- Add a cointegration view to the /correlation page (API exists, UI needs a toggle/tab).
+- Add E6 (FRED leading macro) + E5 (CryptoQuant onchain-v2) when API keys are configured.
+- Add E11 risk stack (correlation-aware sizing, Kelly ceiling, drawdown deleveraging) — needs pnlR + equityCurve schema fields.
+- The document's honest truth: "These 12 suggestions will make your system more credible, more adaptive, more robust. They will NOT invent alpha that doesn't exist." — implement E9 DSR gate to test whether the current signals have genuine positive expectancy before adding more layers.

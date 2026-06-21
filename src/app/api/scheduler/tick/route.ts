@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getKlines, getTicker24h, getOrderBook, getFundingRate } from '@/lib/market/binance';
 import { getOnchainTrend } from '@/lib/market/onchain';
+import { volTargetSize } from '@/lib/risk/vol_targeting';
 import { computeIndicators } from '@/lib/market/indicators';
 import { computeConsensus, shouldAlert } from '@/lib/analysis/consensus';
 import { gradeExpiredSignals } from '@/lib/analysis/grading';
@@ -252,6 +253,13 @@ async function analyzeAsset(
 
   // 4) Save the signal. Deterministic-only signals are valid signals too —
   //    the conviction reflects which layers contributed.
+  //    E1 vol-targeting: size the position inversely to realized vol so each
+  //    signal risks a constant fraction of equity vol (Moreira-Muir 2017:
+  //    +0.15-0.30 Sharpe). Stamp the sizing into the rationale (no schema
+  //    migration — ponytail: reuse the existing field).
+  const volTarget = volTargetSize(10000, klines); // 10k equity placeholder
+  const volTargetTag = `[vol-target:${(volTarget.sizePct * 100).toFixed(1)}% rv:${(volTarget.realizedVol * 100).toFixed(2)}%]`;
+  const triggerTag = triggerSource !== 'auto' ? `[trigger:${triggerSource}] ` : '';
   const created = await db.signal.create({
     data: {
       assetId: asset.id,
@@ -263,10 +271,7 @@ async function analyzeAsset(
       entryPrice: consensus.entryPrice,
       stopLoss: consensus.stopLoss,
       takeProfit: consensus.takeProfit,
-      // Stamp the trigger source as a machine-readable prefix on the rationale
-      // so the signals feed can show a "triggered by" badge without a schema
-      // migration. Auto-scans have no prefix (the common case).
-      rationale: triggerSource !== 'auto' ? `[trigger:${triggerSource}] ${consensus.rationale}` : consensus.rationale,
+      rationale: `${triggerTag}${volTargetTag} ${consensus.rationale}`,
       status: 'open',
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     },

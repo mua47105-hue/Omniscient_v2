@@ -130,13 +130,20 @@ function convictionGradient(v: number): string {
   return `linear-gradient(90deg, #f43f5e 0%, #f59e0b ${stop * 0.6}%, #10b981 ${stop}%, #10b981 100%)`;
 }
 
-// Parse the "[trigger:SOURCE]" prefix the brain stamps on force-run'd signals.
-// Returns the source ('manual'|'news'|'cross-asset') + the rationale with the
-// prefix stripped, so operators see a clean "Triggered by: news" badge instead
-// of a raw tag. Auto-scanned signals have no prefix → source null.
-function parseTrigger(rationale: string): { source: string | null; clean: string } {
-  const m = rationale.match(/^\[trigger:(manual|news|cross-asset)\]\s*(.*)$/s);
-  return m ? { source: m[1], clean: m[2] } : { source: null, clean: rationale };
+// Parse the "[trigger:SOURCE]" + "[vol-target:X% rv:Y%]" prefixes the brain
+// stamps on signals. Returns the trigger source + vol-target sizing + the
+// rationale with all prefixes stripped, so operators see clean badges.
+function parseTrigger(rationale: string): { source: string | null; volTarget: string | null; clean: string } {
+  let source: string | null = null;
+  let volTarget: string | null = null;
+  let clean = rationale;
+  // Trigger prefix: [trigger:manual|news|cross-asset]
+  const tm = clean.match(/^\[trigger:(manual|news|cross-asset)\]\s*/);
+  if (tm) { source = tm[1]; clean = clean.slice(tm[0].length); }
+  // Vol-target prefix: [vol-target:X.X% rv:Y.YY%]
+  const vm = clean.match(/^\[vol-target:([^\]]+)\]\s*/);
+  if (vm) { volTarget = vm[1]; clean = clean.slice(vm[0].length); }
+  return { source, volTarget, clean };
 }
 
 function formatPrice(p: number | null | undefined): string {
@@ -334,21 +341,29 @@ function SignalCard({ signal, index }: { signal: Signal; index: number }) {
             </div>
           )}
 
-          {/* Rationale — with optional "Triggered by" badge for force-run'd signals */}
+          {/* Rationale — with optional "Triggered by" + "Vol-target" badges */}
           {signal.rationale && (() => {
-            const { source, clean } = parseTrigger(signal.rationale);
+            const { source, volTarget, clean } = parseTrigger(signal.rationale);
             return (
               <div className="space-y-1.5">
-                {source && (
-                  <div className="flex items-center gap-1.5">
-                    <Badge variant="outline" className={cn('px-1.5 py-0 text-[10px] gap-1',
-                      source === 'news' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' :
-                      source === 'cross-asset' ? 'bg-violet-500/15 text-violet-400 border-violet-500/30' :
-                      'bg-sky-500/15 text-sky-400 border-sky-500/30'
-                    )}>
-                      <Zap className="h-2.5 w-2.5" />
-                      Triggered by {source}
-                    </Badge>
+                {(source || volTarget) && (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {source && (
+                      <Badge variant="outline" className={cn('px-1.5 py-0 text-[10px] gap-1',
+                        source === 'news' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' :
+                        source === 'cross-asset' ? 'bg-violet-500/15 text-violet-400 border-violet-500/30' :
+                        'bg-sky-500/15 text-sky-400 border-sky-500/30'
+                      )}>
+                        <Zap className="h-2.5 w-2.5" />
+                        Triggered by {source}
+                      </Badge>
+                    )}
+                    {volTarget && (
+                      <Badge variant="outline" className="px-1.5 py-0 text-[10px] gap-1 bg-emerald-500/10 text-emerald-400/80 border-emerald-500/20">
+                        <Target className="h-2.5 w-2.5" />
+                        {volTarget}
+                      </Badge>
+                    )}
                   </div>
                 )}
                 <div
