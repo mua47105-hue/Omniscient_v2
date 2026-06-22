@@ -1,6 +1,14 @@
 // Consensus Engine — fuses multi-layer scores + multi-model outputs into one signal.
+//
+// Regime-conditional weights: the LAYER_WEIGHTS vector shifts based on the
+// Hurst exponent of the price series. In a trending regime (H > 0.5),
+// momentum/technical signals get more weight and mean-reversion signals
+// (RSI extremes, Bollinger bands) get less. In a mean-reverting regime
+// (H < 0.5), the reverse. This prevents the structurally losing pattern
+// of applying RSI mean-reversion logic in a trending market.
 
 import type { ConsensusResult, LayerScore, TechnicalIndicators, OrderBook } from '@/lib/types';
+import { hurstExponent } from '@/lib/analysis/hurst';
 
 export interface ConsensusInput {
   asset: string;
@@ -12,9 +20,12 @@ export interface ConsensusInput {
   sentimentScore?: number; // -100..100 from news
   llmAnalysis?: { score: number; rationale: string; model: string };
   onchainTrend?: { direction: 'rising' | 'falling' | 'flat'; pctChange: number; sampleCount: number };
+  /** Recent klines for Hurst regime detection. If provided, weights become regime-conditional. */
+  klines?: { close: number }[];
 }
 
-const LAYER_WEIGHTS: Record<string, number> = {
+// Static default weights (used when no klines / Hurst unavailable).
+const DEFAULT_WEIGHTS: Record<string, number> = {
   technical: 0.25,
   orderbook: 0.15,
   onchain: 0.1,
@@ -23,6 +34,50 @@ const LAYER_WEIGHTS: Record<string, number> = {
   fundamental: 0.1,
   intermarket: 0.1,
 };
+
+// Regime-conditional weight vectors.
+// Trending (H > 0.55): boost technical (momenton), reduce sentiment (noise).
+const TRENDING_WEIGHTS: Record<string, number> = {
+  technical: 0.35,
+  orderbook: 0.15,
+  onchain: 0.10,
+  sentiment: 0.10,
+  macro: 0.10,
+  fundamental: 0.10,
+  intermarket: 0.10,
+};
+
+// Mean-reverting (H < 0.45): boost sentiment + orderbook (contrarian), reduce technical (momentum fails).
+const MEAN_REVERTING_WEIGHTS: Record<string, number> = {
+  technical: 0.15,
+  orderbook: 0.20,
+  onchain: 0.10,
+  sentiment: 0.25,
+  macro: 0.10,
+  fundamental: 0.10,
+  intermarket: 0.10,
+};
+
+/**
+ * Select the weight vector based on the Hurst exponent of the price series.
+ * H > 0.55 → trending (momentum works). H < 0.45 → mean-reverting (RSI/BB works).
+ * Between 0.45-0.55 → use default (random walk, no edge either way).
+ */
+function getRegimeWeights(klines?: { close: number }[]): Record<string, number> {
+  if (!klines || klines.length < 100) return DEFAULT_WEIGHTS;
+  // Compute returns (I(0) series) for Hurst — NOT price levels.
+  const returns: number[] = [];
+  for (let i = 1; i < klines.length; i++) {
+    if (klines[i - 1].close > 0) {
+      returns.push(Math.log(klines[i].close / klines[i - 1].close));
+    }
+  }
+  if (returns.length < 100) return DEFAULT_WEIGHTS;
+  const h = hurstExponent(returns);
+  if (h > 0.55) return TRENDING_WEIGHTS;
+  if (h < 0.45) return MEAN_REVERTING_WEIGHTS;
+  return DEFAULT_WEIGHTS;
+}
 
 export function buildTechnicalLayer(ti: TechnicalIndicators): LayerScore {
   const score = ti.summary.score; // -100..100
@@ -78,6 +133,7 @@ export function buildOnchainLayer(trend: { direction: 'rising' | 'falling' | 'fl
 
 export function computeConsensus(input: ConsensusInput, llmLayer?: LayerScore): ConsensusResult {
   const layers: LayerScore[] = [];
+  const weights = getRegimeWeights(input.klines);
 
   if (input.technical) {
     const tl = buildTechnicalLayer(input.technical);
@@ -104,7 +160,7 @@ export function computeConsensus(input: ConsensusInput, llmLayer?: LayerScore): 
   let weightedScore = 0;
   let totalConfidence = 0;
   for (const l of layers) {
-    const w = LAYER_WEIGHTS[l.layer] ?? 0.1;
+    const w = weights[l.layer] ?? 0.1;
     totalWeight += w;
     weightedScore += l.score * w;
     totalConfidence += l.confidence * w;
