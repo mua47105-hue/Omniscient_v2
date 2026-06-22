@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveModel, completeWithAutoFallback } from '@/lib/llm/router';
 import { NEWS_SENTIMENT_SYSTEM } from '@/lib/llm/prompts';
+import { extractJsonArray } from '@/lib/llm/json';
 import type { ApiResult } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -62,43 +63,9 @@ ${lines}
 Respond with ONLY the JSON array, no prose.`;
 }
 
-/** Extract the first JSON array found in a string (handles code-fence + preamble). */
-function extractJsonArray(content: string): unknown[] | null {
-  if (!content) return null;
-  // strip code fences if present
-  const cleaned = content
-    .replace(/```json\s*/gi, '')
-    .replace(/```/g, '')
-    .trim();
-  // try direct parse first
-  try {
-    const v = JSON.parse(cleaned);
-    if (Array.isArray(v)) return v as unknown[];
-  } catch {
-    /* fall through */
-  }
-  // otherwise find the first '[' ... matching ']'
-  const start = cleaned.indexOf('[');
-  if (start === -1) return null;
-  let depth = 0;
-  for (let i = start; i < cleaned.length; i++) {
-    const c = cleaned[i];
-    if (c === '[') depth++;
-    else if (c === ']') {
-      depth--;
-      if (depth === 0) {
-        const slice = cleaned.slice(start, i + 1);
-        try {
-          const v = JSON.parse(slice);
-          if (Array.isArray(v)) return v as unknown[];
-        } catch {
-          return null;
-        }
-      }
-    }
-  }
-  return null;
-}
+/** Extract the first JSON array found in a string (handles code-fence + preamble).
+ *  Now delegates to the shared @/lib/llm/json utility which also handles smart
+ *  quotes, trailing commas, and nested structures more robustly. */
 
 function normalizeResult(raw: any, index: number): SentimentResult {
   const sentimentRaw = Number(raw?.sentiment);

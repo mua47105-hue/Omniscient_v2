@@ -7,6 +7,7 @@ import { computeIndicators } from '@/lib/market/indicators';
 import { computeConsensus, shouldAlert, buildTechnicalLayer } from '@/lib/analysis/consensus';
 import { resolveModel, completeWithAutoFallback } from '@/lib/llm/router';
 import { MARKETS_ANALYSIS_SYSTEM } from '@/lib/llm/prompts';
+import { extractJsonObject } from '@/lib/llm/json';
 import { sendSignalAlert } from '@/lib/alerts/telegram';
 import { getSetting, SETTING_KEYS } from '@/lib/config/settings';
 import type { ApiResult, ConsensusResult, LayerScore } from '@/lib/types';
@@ -70,7 +71,13 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
           jsonMode: true,
           maxTokens: 400,
         });
-        const parsed = JSON.parse(result.content);
+        // Robust JSON extraction — Pollinations (and other LLMs) often wrap
+        // JSON in markdown fences or add preamble even with json_mode on.
+        const parsed = extractJsonObject<{ score?: number; direction?: string; rationale?: string; confidence?: number }>(result.content);
+        if (!parsed) {
+          console.error('[markets/scan] LLM returned unparseable JSON, falling back to deterministic layer. Raw content (first 200 chars):', result.content.slice(0, 200));
+          throw new Error('LLM JSON extraction failed');
+        }
         llmAnalysis = {
           score: typeof parsed.score === 'number' ? parsed.score : techSummary.score,
           rationale: parsed.rationale || 'No rationale provided.',
