@@ -23,6 +23,35 @@ function nativeHttpsGet(url: string, headers: Record<string, string>, timeoutMs 
   });
 }
 
+// Binance public REST hosts — `api.binance.com` is geo-blocked (451) on cloud
+// datacenters (Hugging Face Spaces, etc.); the public mirror
+// `data-api.binance.vision` serves the identical API and is NOT geo-blocked.
+const BINANCE_HOSTS = [
+  'https://api.binance.com',
+  'https://data-api.binance.vision',
+  'https://api-gcp.binance.com',
+];
+
+/** GET a Binance REST path, trying every host in order. Returns first success. */
+async function binanceNativeGet(path: string, headers: Record<string, string>, timeoutMs = 10000): Promise<{ status: number; text: string }> {
+  let lastRes = { status: 0, text: '' };
+  for (const host of BINANCE_HOSTS) {
+    try {
+      const res = await nativeHttpsGet(`${host}${path}`, headers, timeoutMs);
+      // 451/418/403 = geo-blocked → try next host. Other statuses (200, 400, etc.) → return.
+      if (res.status === 451 || res.status === 418 || res.status === 403) {
+        lastRes = res;
+        continue;
+      }
+      return res;
+    } catch {
+      // network error → try next host
+      continue;
+    }
+  }
+  return lastRes;
+}
+
 // --- In-memory cache to survive Yahoo rate limits ---
 const cache = new Map<string, { data: any; ts: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
@@ -105,7 +134,7 @@ async function binanceGoldProxy(): Promise<{ price: number; changePct: number; p
   const cacheKey = 'binance:paxg';
   const cached = getCached<any>(cacheKey);
   if (cached) return cached;
-  const { status, text } = await nativeHttpsGet('https://api.binance.com/api/v3/ticker/24hr?symbol=PAXGUSDT', {
+  const { status, text } = await binanceNativeGet('/api/v3/ticker/24hr?symbol=PAXGUSDT', {
     'User-Agent': UA, Accept: 'application/json',
   });
   if (status !== 200) throw new Error(`Binance PAXG ${status}`);
@@ -231,7 +260,7 @@ export async function getMacroQuote(key: MacroKey, range = '30d'): Promise<Macro
       return toQuote(await yahooChart(MACRO_SYMBOLS[key], '1d', range));
     } catch {
       const sym = key === 'btc' ? 'BTCUSDT' : 'ETHUSDT';
-      const { status, text } = await nativeHttpsGet(`https://api.binance.com/api/v3/ticker/24hr?symbol=${sym}`, {
+      const { status, text } = await binanceNativeGet(`/api/v3/ticker/24hr?symbol=${sym}`, {
         'User-Agent': UA, Accept: 'application/json',
       });
       if (status === 200) {
@@ -290,8 +319,8 @@ export const BINANCE_FALLBACKS: Record<string, { binanceSymbol: string; name: st
 
 /** Fetch klines from Binance (daily) for fallback purposes */
 async function getBinanceDailyKlines(symbol: string, limit = 200): Promise<Kline[]> {
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=${limit}`;
-  const { status, text } = await nativeHttpsGet(url, { 'User-Agent': UA, Accept: 'application/json' });
+  const path = `/api/v3/klines?symbol=${symbol}&interval=1d&limit=${limit}`;
+  const { status, text } = await binanceNativeGet(path, { 'User-Agent': UA, Accept: 'application/json' });
   if (status !== 200) throw new Error(`Binance klines ${status} for ${symbol}`);
   const data = JSON.parse(text);
   return data.map((k: any[]) => ({
@@ -543,7 +572,7 @@ export async function getGlobalCryptoStats(): Promise<GlobalCryptoStats> {
   const cached = getCached<GlobalCryptoStats>(cacheKey);
   if (cached) return cached;
 
-  // Try CoinGecko global via native https (bypasses Next.js fetch patching)
+  // --- Source 1: CoinGecko /global (richest data — BTC dominance, mcap change) ---
   try {
     const { status, text } = await nativeHttpsGet('https://api.coingecko.com/api/v3/global', {
       'User-Agent': UA, Accept: 'application/json',
@@ -562,13 +591,49 @@ export async function getGlobalCryptoStats(): Promise<GlobalCryptoStats> {
       setCached(cacheKey, out);
       return out;
     }
+    console.error(`[macro] CoinGecko global returned ${status}`);
   } catch (e: any) {
     console.error('[macro] CoinGecko global failed:', e.message);
   }
 
-  // Fallback: compute from Binance top tickers (BTC+ETH+top alts market cap proxy)
+  // --- Source 2: CoinGecko /coins/markets (works when /global is rate-limited;
+  //     derive dominance from per-coin market caps). This is the path that
+  //     survives HF Spaces shared-IP rate limiting. ---
   try {
-    const { status, text } = await nativeHttpsGet('https://api.binance.com/api/v3/ticker/24hr', {
+    const { status, text } = await nativeHttpsGet(
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h',
+      { 'User-Agent': UA, Accept: 'application/json' }
+    );
+    if (status === 200) {
+      const coins: any[] = JSON.parse(text);
+      const totalMarketCap = coins.reduce((s, c) => s + (c.market_cap ?? 0), 0);
+      const totalVolume = coins.reduce((s, c) => s + (c.total_volume ?? 0), 0);
+      const btc = coins.find((c) => (c.symbol || '').toUpperCase() === 'BTC');
+      const eth = coins.find((c) => (c.symbol || '').toUpperCase() === 'ETH');
+      const btcMcap = btc?.market_cap ?? 0;
+      const ethMcap = eth?.market_cap ?? 0;
+      const avgChange = coins.length
+        ? coins.reduce((s, c) => s + (c.price_change_percentage_24h ?? 0), 0) / coins.length
+        : 0;
+      const out: GlobalCryptoStats = {
+        totalMarketCap,
+        totalVolume,
+        btcDominance: totalMarketCap > 0 ? (btcMcap / totalMarketCap) * 100 : 0,
+        ethDominance: totalMarketCap > 0 ? (ethMcap / totalMarketCap) * 100 : 0,
+        marketCapChangePct24h: avgChange,
+        activeCryptos: coins.length,
+      };
+      setCached(cacheKey, out);
+      return out;
+    }
+    console.error(`[macro] CoinGecko markets returned ${status}`);
+  } catch (e: any) {
+    console.error('[macro] CoinGecko markets fallback failed:', e.message);
+  }
+
+  // --- Source 3: Binance (only works when not geo-blocked — e.g. local dev) ---
+  try {
+    const { status, text } = await binanceNativeGet('/api/v3/ticker/24hr', {
       'User-Agent': UA, Accept: 'application/json',
     });
     if (status === 200) {
@@ -595,5 +660,5 @@ export async function getGlobalCryptoStats(): Promise<GlobalCryptoStats> {
   } catch (e: any) {
     console.error('[macro] Binance global fallback failed:', e.message);
   }
-  throw new Error('Global crypto stats unavailable (CoinGecko + Binance both failed)');
+  throw new Error('Global crypto stats unavailable (CoinGecko global + CoinGecko markets + Binance all failed)');
 }
