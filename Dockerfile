@@ -10,9 +10,10 @@
 #
 # The seed runs at RUNTIME (in docker-entrypoint.sh), NOT at build time,
 # because /data (the bucket mount) is only available at runtime.
-
-# Cache-bust: forces HF to rebuild ALL layers, not use stale cache
-ARG CACHE_BUST=1
+#
+# NOTE: docker-entrypoint.sh is copied via `COPY . .` (it lands at
+# /app/docker-entrypoint.sh). We do NOT use a separate COPY for it — that
+# was causing BuildKit cache context errors on HF Spaces ("not found").
 
 FROM node:20-slim
 
@@ -28,8 +29,12 @@ RUN npm install -g bun
 COPY package.json ./
 RUN bun install --frozen-lockfile || bun install
 
-# Copy all source
+# Copy all source (including docker-entrypoint.sh → /app/docker-entrypoint.sh)
 COPY . .
+
+# Make the runtime entrypoint executable (it's already at /app/docker-entrypoint.sh
+# from the COPY . . above — no separate COPY needed)
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Set env defaults (HF Space Secrets/Variables override these at runtime)
 ENV DATABASE_URL="file:/data/custom.db"
@@ -48,13 +53,10 @@ RUN bun run build
 # Create the persistent data directory (will be overridden by bucket mount on HF)
 RUN mkdir -p /data && chmod 777 /data
 
-# Copy the runtime entrypoint
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
-
 # Expose port
 EXPOSE 7860
 
-# Runtime entrypoint: ensures DB schema exists + seeds if first run, then starts the app
-ENTRYPOINT ["/docker-entrypoint.sh"]
+# Runtime entrypoint: ensures DB schema exists + seeds if first run, then starts the app.
+# Uses /app/docker-entrypoint.sh (copied by COPY . ., not a separate COPY).
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["npx", "next", "start", "-p", "7860", "-H", "0.0.0.0"]
