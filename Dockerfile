@@ -1,5 +1,8 @@
 # OMNISCIENT — Hugging Face Spaces Dockerfile
-# Single-stage build — simpler, more reliable than multi-stage
+# Single-stage build — simple, reliable, no standalone server.js
+
+# Cache-bust: forces HF to rebuild ALL layers, not use stale cache
+ARG CACHE_BUST=1
 
 FROM node:20-slim
 
