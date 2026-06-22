@@ -63,10 +63,21 @@ export interface RepoActivity {
  * + this-week commits + last-week commits), fired in parallel per repo. The
  * delta (this vs last week) is a genuine trend signal — rising dev activity =
  * accelerating development. Returns what it can; each repo degrades independently.
+ *
+ * If ALL repos fail (typically GitHub anonymous rate-limit 60/hr exhausted on a
+ * shared IP), returns an empty array instead of throwing — the UI shows
+ * "temporarily unavailable" rather than a 500 crash. The empty result is cached
+ * for 5 min so we don't keep hammering GitHub while rate-limited.
  */
 export async function getDevActivity(): Promise<RepoActivity[]> {
   const cachedArr = cached<RepoActivity[]>('devactivity');
   if (cachedArr) return cachedArr;
+
+  // Also cache the "all failed" empty result briefly to avoid re-hammering
+  // GitHub when we're rate-limited (60/hr anonymous limit is easy to exhaust
+  // on a shared datacenter IP).
+  const cachedFail = cached<RepoActivity[]>('devactivity:fail');
+  if (cachedFail) return cachedFail;
 
   const now = Date.now();
   const sinceThis = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -96,7 +107,14 @@ export async function getDevActivity(): Promise<RepoActivity[]> {
   );
   const out: RepoActivity[] = [];
   for (const r of results) if (r.status === 'fulfilled') out.push(r.value);
-  if (out.length === 0) throw new Error('All GitHub repos failed');
+  if (out.length === 0) {
+    // All repos failed (likely GitHub rate-limit). Cache the empty result for
+    // 5 min so we don't re-hammer, and return [] — the UI will show
+    // "temporarily unavailable" instead of crashing with a 500.
+    cache.set('devactivity:fail', { data: [], ts: Date.now() });
+    // Override the TTL for the fail cache (5 min, not 30 min)
+    return [];
+  }
   store('devactivity', out);
   return out;
 }

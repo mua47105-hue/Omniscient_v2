@@ -31,8 +31,31 @@ export async function POST(req: NextRequest) {
     try { meta = JSON.parse(asset.meta || '{}'); } catch {}
     const yahooSymbol = meta.yahooSymbol || asset.symbol;
 
-    // Fetch klines (Yahoo daily candles, with Binance fallback for gold/BTC/ETH)
-    const quote = await getQuoteWithFallback(yahooSymbol, '1y');
+    // Fetch klines (Yahoo daily candles, with Binance fallback for gold/BTC/ETH).
+    // Yahoo intermittently 429s on shared datacenter IPs — retry once after a
+    // short delay if the first attempt fails, so a transient blip doesn't crash
+    // the scan.
+    let quote;
+    try {
+      quote = await getQuoteWithFallback(yahooSymbol, '1y');
+    } catch (firstErr: any) {
+      const msg = firstErr?.message || '';
+      if (msg.includes('429') || msg.includes('Yahoo')) {
+        // Wait 1.5s and retry — Yahoo rate-limits are often very short-lived
+        await new Promise((r) => setTimeout(r, 1500));
+        try {
+          quote = await getQuoteWithFallback(yahooSymbol, '1y');
+        } catch {
+          // Still failing — return a clear, actionable error instead of a 500.
+          return NextResponse.json<ApiResult<never>>({
+            success: false,
+            error: 'Yahoo Finance is rate-limiting this server. Please try again in a minute or two.',
+          }, { status: 503 });
+        }
+      } else {
+        throw firstErr;
+      }
+    }
     const klines = quote.klines || [];
 
     if (klines.length < 50) {
