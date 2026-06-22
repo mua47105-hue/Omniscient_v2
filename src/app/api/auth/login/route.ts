@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getSetting, SETTING_KEYS } from '@/lib/config/settings';
+import { HF_SECRETS } from '@/lib/runtime';
 import type { ApiResult } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -7,9 +9,12 @@ export async function POST(req: NextRequest) {
   try {
     const { password } = await req.json();
 
-    // Use environment variable first, then fall back to a hardcoded default.
-    // This works on Vercel (no SQLite needed) AND on local dev (with DB).
-    const correctPassword = process.env.APP_PASSWORD || 'omniscient';
+    // Password resolution (env-over-DB):
+    //   1. HF Secret: process.env.APP_PASSWORD (set in Space Settings UI)
+    //   2. DB Setting: app_password (set via Settings → Security UI)
+    //   3. Default: "omniscient"
+    const dbPassword = await getSetting<string>(SETTING_KEYS.appPassword, '');
+    const correctPassword = HF_SECRETS.appPassword || dbPassword || 'omniscient';
 
     if (password === correctPassword) {
       const res = NextResponse.json<ApiResult<{ ok: boolean }>>({ success: true, data: { ok: true } });

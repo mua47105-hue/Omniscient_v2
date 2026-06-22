@@ -1,8 +1,14 @@
-// Supabase client — created on the fly from credentials stored in the Setting table.
+// Supabase client — created on the fly from credentials stored in the Setting table
+// OR from HF Space Secrets (env vars).
+//
+// Credential resolution (env-over-DB):
+//   1. HF Secret: process.env.SUPABASE_URL + process.env.SUPABASE_ANON_KEY
+//      (set in Space Settings UI, persists across restarts)
+//   2. SQLite Setting table (set via Settings UI, persists if DB on /data)
 //
 // The user configures their Supabase Project URL + anon key via the dashboard
-// (Settings → Supabase). This module reads those settings and returns a cached
-// client instance. When credentials are not configured, returns null.
+// (Settings → Supabase) OR via HF Space Secrets. This module reads both and
+// returns a cached client instance. When credentials are not configured, returns null.
 //
 // IMPORTANT: the anon key is the PUBLIC key from Supabase. For a personal
 // dashboard you should either disable RLS on the tables OR create policies
@@ -11,6 +17,7 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getSetting } from '@/lib/config/settings';
+import { HF_SECRETS } from '@/lib/runtime';
 
 export const SUPABASE_SETTING_KEYS = {
   url: 'supabase_url',
@@ -25,8 +32,15 @@ export interface SupabaseConfig {
   anonKey: string;
 }
 
-/** Read Supabase credentials from the Setting table. Returns null if not configured. */
+/** Read Supabase credentials — HF Secret env var first, then DB. Returns null if not configured. */
 export async function getSupabaseConfig(): Promise<SupabaseConfig | null> {
+  // Layer 1: HF Secret env vars (highest priority — persists across restarts)
+  if (HF_SECRETS.supabaseUrl && HF_SECRETS.supabaseAnonKey &&
+      !HF_SECRETS.supabaseUrl.startsWith('PASTE_') && !HF_SECRETS.supabaseAnonKey.startsWith('PASTE_')) {
+    return { url: HF_SECRETS.supabaseUrl, anonKey: HF_SECRETS.supabaseAnonKey };
+  }
+
+  // Layer 2: SQLite Setting table
   const url = await getSetting<string>(SUPABASE_SETTING_KEYS.url, '');
   const anonKey = await getSetting<string>(SUPABASE_SETTING_KEYS.anonKey, '');
   if (!url || !anonKey || url.startsWith('PASTE_') || anonKey.startsWith('PASTE_')) {

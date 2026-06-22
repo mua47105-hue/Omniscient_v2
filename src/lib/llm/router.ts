@@ -348,21 +348,44 @@ function markKeyRateLimited(providerName: string, key: string): void {
   console.log(`[llm] Key ${providerName}:...${keyHash(key)} rate-limited — cooldown ${KEY_COOLDOWN_MS / 1000}s`);
 }
 
-/** Call a specific provider+model (internal) — with multi-key rotation. */
+/** Map provider name → HF Secret env var name for API key overrides.
+ *  Set these as HF Space Secrets to override DB-stored keys (persists across restarts). */
+const ENV_KEY_FOR_PROVIDER_STATIC: Record<string, string> = {
+  'OpenRouter': 'OPENROUTER_API_KEY',
+  'Groq': 'GROQ_API_KEY',
+  'Gemini': 'GEMINI_API_KEY',
+  'Mistral': 'MISTRAL_API_KEY',
+  'NVIDIA NIM': 'NVIDIA_NIM_API_KEY',
+  'Cerebras': 'CEREBRAS_API_KEY',
+  'AIMLAPI': 'AIMLAPI_API_KEY',
+  'SiliconFlow': 'SILICONFLOW_API_KEY',
+  'xAI Grok': 'XAI_API_KEY',
+  'Hugging Face': 'HUGGINGFACE_API_KEY',
+};
+
+/** Call a specific provider+model (internal) — with multi-key rotation + env-var override. */
 async function callProvider(
   provider: { baseUrl: string; apiKey: string; name: string },
   modelId: string,
   messages: LlmMessage[],
   opts: { temperature?: number; maxTokens?: number; jsonMode?: boolean }
 ): Promise<LlmCompletionResponse> {
-  const allKeys = parseKeys(provider.apiKey);
+  // Env-var override: HF Space Secrets can set provider-specific API keys
+  // that override the DB-stored keys. This lets users set keys once in HF
+  // Space Settings and have them persist across restarts without re-entering
+  // in the UI.
+  const envKeyName = ENV_KEY_FOR_PROVIDER_STATIC[provider.name];
+  const envKey = envKeyName ? process.env[envKeyName] : undefined;
+  const effectiveApiKey = envKey && envKey.length > 0 && !envKey.startsWith('PASTE_') ? envKey : provider.apiKey;
+
+  const allKeys = parseKeys(effectiveApiKey);
   if (allKeys.length === 0) {
-    throw new Error(`No API key configured for ${provider.name}`);
+    throw new Error(`No API key configured for ${provider.name}` + (envKeyName ? ` (set ${envKeyName} as an HF Space Secret, or paste a key in Settings)` : ''));
   }
 
   // Try each available key in sequence. On 429, mark cooldown + try next.
   // If ALL keys are cooling down, try the first one anyway (maybe it recovered).
-  let availableKeys = getAvailableKeys(provider.name, provider.apiKey);
+  let availableKeys = getAvailableKeys(provider.name, effectiveApiKey);
   if (availableKeys.length === 0) {
     // All keys in cooldown — try the first one (best effort)
     availableKeys = [allKeys[0]];
@@ -443,8 +466,11 @@ export async function completeWithAutoFallback(
 
     for (const p of sorted) {
       if (p.models.length === 0) continue;
-      // Skip providers with placeholder keys
-      if (p.apiKey.startsWith('PASTE_') || p.apiKey.startsWith('YOUR_')) continue;
+      // Skip providers with placeholder keys — UNLESS an env-var override exists.
+      // HF Space Secrets can set provider keys that override the DB placeholders.
+      const envKeyName = ENV_KEY_FOR_PROVIDER_STATIC[p.name];
+      const hasEnvOverride = envKeyName && process.env[envKeyName] && !process.env[envKeyName]!.startsWith('PASTE_');
+      if (!hasEnvOverride && (p.apiKey.startsWith('PASTE_') || p.apiKey.startsWith('YOUR_'))) continue;
       try {
         const result = await callProvider(p, p.models[0].modelId, req.messages, req);
         console.log(`[llm] Fallback to ${p.name}/${p.models[0].modelId} succeeded`);
