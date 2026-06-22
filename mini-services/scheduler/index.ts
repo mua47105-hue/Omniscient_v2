@@ -16,6 +16,10 @@
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '60', 10); // seconds
 const PORT = parseInt(process.env.PORT || '3042', 10); // tiny status server
+// CRON_SECRET: shared secret with the Next.js app for authenticating scheduler
+// requests. Must match the CRON_SECRET env var set on the main app. Set this
+// in HF Space Secrets so it persists across restarts.
+const CRON_SECRET = process.env.CRON_SECRET || '';
 
 const startedAt = Date.now();
 let ticksTotal = 0;
@@ -28,12 +32,21 @@ let lastError: string | null = null;
 async function tick() {
   ticksTotal++;
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    // Send the cron secret so the auth middleware accepts the request.
+    // If CRON_SECRET isn't set, the tick will 401 — log a clear error.
+    if (CRON_SECRET) {
+      headers['X-Cron-Secret'] = CRON_SECRET;
+    }
     const res = await fetch(`${APP_URL}/api/scheduler/tick`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ ts: Date.now() }),
       signal: AbortSignal.timeout(60_000),
     });
+    if (res.status === 401) {
+      throw new Error('tick 401 — set CRON_SECRET env on both the app and the scheduler');
+    }
     if (!res.ok) {
       throw new Error(`tick HTTP ${res.status}: ${await res.text().catch(() => '')}`);
     }

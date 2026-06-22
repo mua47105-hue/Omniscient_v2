@@ -205,17 +205,24 @@ export async function getOrderBook(symbol: string, limit: number = 50): Promise<
   return ob;
 }
 
-/** Funding rate (futures) — for sentiment */
+/** Funding rate (futures) — for sentiment.
+ *  Cached 8h (funding only changes every 8h, per Improvement Plan §4.3). */
 export async function getFundingRate(symbol: string): Promise<{ rate: number; nextFunding: number }> {
-  const data = await fetchJson<any>(
-    `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol.toUpperCase()}`
+  const sym = symbol.toUpperCase();
+  const cacheKey = `fr:${sym}`;
+  const cached = getCached<{ rate: number; nextFunding: number }>(cacheKey);
+  if (cached) return cached;
+  const data = await fetchJsonUncached<any>(
+    `https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${sym}`
   );
   const arr = Array.isArray(data) ? data : [data];
   const d = arr[0];
-  return {
+  const result = {
     rate: parseFloat(d.lastFundingRate),
     nextFunding: d.nextFundingTime,
   };
+  setCached(cacheKey, result, 8 * 60 * 60 * 1000); // 8h cache
+  return result;
 }
 
 /** Open Interest (futures) */

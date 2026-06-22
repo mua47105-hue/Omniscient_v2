@@ -5,7 +5,7 @@ import type { ApiResult } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const limit = parseInt(req.nextUrl.searchParams.get('limit') || '50');
+  const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') || '50'), 500);
   const status = req.nextUrl.searchParams.get('status'); // open | closed | all
   const where: any = {};
   if (status && status !== 'all') where.status = status;

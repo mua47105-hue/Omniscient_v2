@@ -343,6 +343,17 @@ async function runForcedAnalysis(sendAlerts: boolean) {
 }
 
 export async function POST(req: NextRequest) {
+  // Tick mutex (per Improvement Plan §4.1) — prevents overlapping ticks from
+  // corrupting brain state. Uses globalThis so it survives module hot-reloads.
+  const g = globalThis as unknown as { __tickInProgress?: boolean };
+  if (g.__tickInProgress) {
+    return NextResponse.json({
+      success: true,
+      data: { skipped: 'overlap', message: 'Previous tick still running' },
+    });
+  }
+  g.__tickInProgress = true;
+
   try {
     const forceModule = req.nextUrl.searchParams.get('module');
     const sendAlerts = req.nextUrl.searchParams.get('alerts') === '1';
@@ -455,6 +466,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary; triggers: typeof triggerSummary; newsTriggers: typeof newsTriggerSummary; tune: typeof tuneSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary, triggers: triggerSummary, newsTriggers: newsTriggerSummary, tune: tuneSummary } });
   } catch (e: any) {
     return NextResponse.json<ApiResult<never>>({ success: false, error: e.message }, { status: 500 });
+  } finally {
+    // Always clear the tick mutex so the next tick can run
+    (globalThis as unknown as { __tickInProgress?: boolean }).__tickInProgress = false;
   }
 }
 

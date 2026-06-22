@@ -73,6 +73,8 @@ export async function GET() {
           select: { direction: true, modelsUsed: true },
         },
       },
+      orderBy: { createdAt: 'desc' },
+      take: 500, // cap to prevent unbounded scan (per §5.2)
     });
 
     const byModel = new Map<string, ModelAgg>();
