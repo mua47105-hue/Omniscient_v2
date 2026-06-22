@@ -130,7 +130,12 @@ export function SupabaseManager() {
       });
       const text = await res.text();
       let j: ApiResult<TestResult>;
-      try { j = JSON.parse(text); } catch { j = { success: false, error: 'Server error — check if DATABASE_URL is configured' }; }
+      try { j = JSON.parse(text); } catch {
+        // Non-JSON response = the endpoint is missing or the server returned
+        // an HTML error page. Surface the HTTP status so the user can tell
+        // whether it's a 404 (endpoint missing), 500 (server crash), etc.
+        j = { success: false, error: `Server returned HTTP ${res.status} (non-JSON response). The test endpoint may be unavailable.` };
+      }
       if (j.success && j.data) {
         setTestResult(j.data);
         if (j.data.ok && j.data.tableExists) {
