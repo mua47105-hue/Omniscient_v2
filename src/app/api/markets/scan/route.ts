@@ -118,7 +118,7 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
       }
     }
 
-    // Consensus (no orderbook/funding for non-crypto — technical + LLM only)
+    // Consensus (no orderbook/funding for non-crypto — technical + LLM + contrarian)
     const consensus = computeConsensus(
       {
         asset: asset.symbol,
@@ -126,6 +126,8 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
         price,
         technical: indicators,
         llmAnalysis,
+        // Pass klines so the contrarian layer can detect divergences + traps
+        klines,
       },
       llmLayer
     );

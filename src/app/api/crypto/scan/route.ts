@@ -94,6 +94,8 @@ Give a concise trading read for the next ${interval} timeframe. Respond as JSON 
         orderbook,
         fundingRate: funding?.rate,
         llmAnalysis,
+        // Pass klines so the contrarian layer can detect divergences + traps
+        klines,
       },
       llmLayer
     );

@@ -10,7 +10,8 @@ export type AnalysisLayer =
   | 'sentiment'
   | 'macro'
   | 'fundamental'
-  | 'intermarket';
+  | 'intermarket'
+  | 'contrarian';
 
 export type ModuleKey =
   | 'crypto_technical'
