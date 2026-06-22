@@ -2,11 +2,11 @@
 #
 # This workflow triggers on every push to main. It:
 #   1. Checks out the repo
-#   2. Pushes the code to your Hugging Face Space (tskkkk/omniscient)
+#   2. Pushes the code to your Hugging Face Space (tohidtsk4/omniscient)
 #   3. HF Spaces auto-builds the Dockerfile and deploys
 #
 # PREREQUISITES (do these once, manually):
-#   1. Create a Hugging Face account (username: tskkkk)
+#   1. Create a Hugging Face account (username: tohidtsk4)
 #   2. Create a new Space: https://huggingface.co/new-space
 #      - Name: omniscient
 #      - SDK: Docker
@@ -45,14 +45,14 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           # Clone the HF Space repo (empty or existing)
-          git clone https://tskkkk:${HF_TOKEN}@huggingface.co/spaces/tskkkk/omniscient hf-space || true
+          git clone https://tohidtsk4:${HF_TOKEN}@huggingface.co/spaces/tohidtsk4/omniscient hf-space || true
 
           # If clone failed (new empty space), init fresh
           if [ ! -d hf-space ]; then
             mkdir hf-space
             cd hf-space
             git init
-            git remote add origin https://tskkkk:${HF_TOKEN}@huggingface.co/spaces/tskkkk/omniscient
+            git remote add origin https://tohidtsk4:${HF_TOKEN}@huggingface.co/spaces/tohidtsk4/omniscient
           else
             cd hf-space
             # Clean old files
@@ -90,4 +90,4 @@ jobs:
           # Commit + push to HF
           git add -A
           git commit -m "Auto-deploy from GitHub: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
-          git push https://tskkkk:${HF_TOKEN}@huggingface.co/spaces/tskkkk/omniscient main
+          git push https://tohidtsk4:${HF_TOKEN}@huggingface.co/spaces/tohidtsk4/omniscient main
