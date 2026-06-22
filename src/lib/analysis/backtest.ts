@@ -164,6 +164,8 @@ export interface BacktestParams {
   takeProfitPct: number; // 2..30 (percent)
   initialCapital: number;
   positionSizePct: number; // 1..25 (percent of equity per trade)
+  feePct?: number; // taker fee per side, e.g. 0.05 = 0.05% (default 0 = no fees, backward compat)
+  slippagePct?: number; // slippage per side, e.g. 0.02 = 0.02% (default 0)
 }
 
 export interface BacktestResult {
@@ -470,6 +472,12 @@ export function runBacktest(params: BacktestParams): BacktestResult {
     initialCapital,
     positionSizePct,
   } = params;
+  // Fee + slippage model: taker fee per side + slippage as % of price.
+  // Default 0 = backward compatible (no costs). Realistic crypto: feePct=0.05,
+  // slippagePct=0.02 (total ~0.14% round-trip on taker orders).
+  const feePct = params.feePct ?? 0;
+  const slippagePct = params.slippagePct ?? 0;
+  const costPerSidePct = feePct + slippagePct; // combined cost per side as %
 
   const n = klines.length;
   const empty: BacktestResult = {
@@ -587,8 +595,12 @@ export function runBacktest(params: BacktestParams): BacktestResult {
         }
 
         if (exitReason && exitPrice !== null) {
-          const pnl = (exitPrice - entryPrice) * position.size;
-          const positionValueAtEntry = entryPrice * position.size;
+          // Apply slippage: entry was filled worse (higher for long), exit worse (lower).
+          // Costs: fee on both entry and exit notional.
+          const entryFillPrice = entryPrice * (1 + costPerSidePct / 100);
+          const exitFillPrice = exitPrice * (1 - costPerSidePct / 100);
+          const pnl = (exitFillPrice - entryFillPrice) * position.size;
+          const positionValueAtEntry = entryFillPrice * position.size;
           const pnlPct =
             positionValueAtEntry > 0 ? (pnl / positionValueAtEntry) * 100 : 0;
           equity += pnl;
@@ -654,8 +666,11 @@ export function runBacktest(params: BacktestParams): BacktestResult {
     const lastK = klines[n - 1];
     const entryPrice = position.entryPrice;
     const exitPrice = lastK.close;
-    const pnl = (exitPrice - entryPrice) * position.size;
-    const positionValueAtEntry = entryPrice * position.size;
+    // Apply costs on final close too
+    const entryFillPrice = entryPrice * (1 + costPerSidePct / 100);
+    const exitFillPrice = exitPrice * (1 - costPerSidePct / 100);
+    const pnl = (exitFillPrice - entryFillPrice) * position.size;
+    const positionValueAtEntry = entryFillPrice * position.size;
     const pnlPct =
       positionValueAtEntry > 0 ? (pnl / positionValueAtEntry) * 100 : 0;
     equity += pnl;

@@ -75,6 +75,8 @@ function runOOS(strategyKey: string, klines: Kline[]): OOSMetrics {
     takeProfitPct: preset.takeProfitPct,
     initialCapital: 10000,
     positionSizePct: preset.positionSizePct,
+    feePct: 0.05,      // 0.05% taker fee per side (Binance futures)
+    slippagePct: 0.02, // 0.02% slippage per side
   });
 
   const tradeReturns = result.trades.map(t => t.pnlPct / 100);
