@@ -458,3 +458,14 @@ export function subscribeTicker(symbol: string, onMessage: (ticker: Ticker) => v
   };
   return () => ws.close();
 }
+
+// --- Data source tracking (for the /api/crypto/source endpoint) ---
+// Tracks which upstream source last served data, so the UI can show an honest
+// "Data via Binance" or "Data via CoinGecko (fallback)" badge.
+export type MarketDataSource = 'binance' | 'coingecko' | 'cache';
+let _lastDataSource: MarketDataSource = 'binance';
+let _lastDataFetchedAt = Date.now();
+
+export function getMarketDataSource(): { source: MarketDataSource; fetchedAt: number } {
+  return { source: _lastDataSource, fetchedAt: _lastDataFetchedAt };
+}
