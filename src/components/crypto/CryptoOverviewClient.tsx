@@ -7,7 +7,7 @@ import { AssetTable } from '@/components/dashboard/AssetTable';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Activity, TrendingUp, Percent, Layers, AlertCircle, ArrowUpRight, ArrowDownRight, Star, RefreshCw, Clock } from 'lucide-react';
+import { Activity, TrendingUp, Percent, Layers, AlertCircle, ArrowUpRight, ArrowDownRight, Star, RefreshCw, Clock, Database, ShieldCheck } from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { Ticker, ApiResult } from '@/lib/types';
 
@@ -16,6 +16,13 @@ async function fetchJson<T>(url: string): Promise<T> {
   const j: ApiResult<T> = await r.json();
   if (!j.success) throw new Error(j.error || 'request failed');
   return j.data as T;
+}
+
+interface SourceInfo {
+  source: 'binance' | 'coingecko' | 'cache';
+  fetchedAt: number;
+  label: string;
+  isFallback: boolean;
 }
 
 export function CryptoOverviewClient() {
@@ -28,6 +35,12 @@ export function CryptoOverviewClient() {
     queryKey: ['crypto-movers'],
     queryFn: () => fetchJson<{ gainers: Ticker[]; losers: Ticker[] }>('/api/crypto/movers'),
     refetchInterval: 60_000,
+  });
+  const sourceQ = useQuery({
+    queryKey: ['crypto-source'],
+    queryFn: () => fetchJson<SourceInfo>('/api/crypto/source'),
+    refetchInterval: 30_000,
+    retry: 0,
   });
 
   // "Last updated Xs ago" — live timer based on the last successful fetch.
@@ -72,7 +85,7 @@ export function CryptoOverviewClient() {
         transition={{ duration: 0.3 }}
         className="flex flex-col gap-1"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Crypto Markets</h1>
           <span className="hidden sm:inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-500">
             <span className="relative flex h-1.5 w-1.5">
@@ -81,9 +94,25 @@ export function CryptoOverviewClient() {
             </span>
             Live
           </span>
+          {/* Data-source badge — honestly shows which upstream is serving data.
+              On Hugging Face Spaces this reads "CoinGecko (fallback)" because
+              Binance geo-blocks datacenter IPs. */}
+          {sourceQ.data && (
+            <span
+              title={`Data source: ${sourceQ.data.label}. On cloud deploys (HF Spaces), Binance is geo-blocked and the app transparently falls back to CoinGecko.`}
+              className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium ${
+                sourceQ.data.isFallback
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                  : 'border-border/60 bg-muted/40 text-muted-foreground'
+              }`}
+            >
+              {sourceQ.data.isFallback ? <ShieldCheck className="h-3 w-3" /> : <Database className="h-3 w-3" />}
+              {sourceQ.data.label}
+            </span>
+          )}
         </div>
         <p className="text-sm text-muted-foreground">
-          Real-time Binance market data · Deep multi-layer AI analysis · Click any asset for full breakdown
+          Real-time market data · Deep multi-layer AI analysis · Click any asset for full breakdown
         </p>
       </motion.div>
 
@@ -251,10 +280,17 @@ function TableSkeleton() {
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-rose-500">
-      <AlertCircle className="h-5 w-5" />
-      <span>{message}</span>
-      <span className="text-xs text-muted-foreground">Will retry automatically</span>
+    <div className="flex flex-col items-center justify-center gap-3 py-12">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10 ring-1 ring-inset ring-rose-500/20">
+        <AlertCircle className="h-6 w-6 text-rose-500" />
+      </div>
+      <div className="text-center space-y-1">
+        <p className="text-sm font-medium text-rose-500">{message}</p>
+        <p className="text-xs text-muted-foreground max-w-sm">
+          All upstream market data sources are unreachable. This usually means the deploy environment is
+          geo-blocked by Binance and CoinGecko is rate-limiting shared IPs. Will retry automatically.
+        </p>
+      </div>
     </div>
   );
 }

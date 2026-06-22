@@ -7,6 +7,7 @@ import { computeIndicators } from '@/lib/market/indicators';
 import { computeConsensus, shouldAlert, buildTechnicalLayer } from '@/lib/analysis/consensus';
 import { resolveModel, completeWithAutoFallback } from '@/lib/llm/router';
 import { MARKETS_ANALYSIS_SYSTEM } from '@/lib/llm/prompts';
+import { extractJsonObject } from '@/lib/llm/json';
 import { sendSignalAlert } from '@/lib/alerts/telegram';
 import { getSetting, SETTING_KEYS } from '@/lib/config/settings';
 import type { ApiResult, ConsensusResult, LayerScore } from '@/lib/types';
@@ -30,8 +31,31 @@ export async function POST(req: NextRequest) {
     try { meta = JSON.parse(asset.meta || '{}'); } catch {}
     const yahooSymbol = meta.yahooSymbol || asset.symbol;
 
-    // Fetch klines (Yahoo daily candles, with Binance fallback for gold/BTC/ETH)
-    const quote = await getQuoteWithFallback(yahooSymbol, '1y');
+    // Fetch klines (Yahoo daily candles, with Binance fallback for gold/BTC/ETH).
+    // Yahoo intermittently 429s on shared datacenter IPs — retry once after a
+    // short delay if the first attempt fails, so a transient blip doesn't crash
+    // the scan.
+    let quote;
+    try {
+      quote = await getQuoteWithFallback(yahooSymbol, '1y');
+    } catch (firstErr: any) {
+      const msg = firstErr?.message || '';
+      if (msg.includes('429') || msg.includes('Yahoo')) {
+        // Wait 1.5s and retry — Yahoo rate-limits are often very short-lived
+        await new Promise((r) => setTimeout(r, 1500));
+        try {
+          quote = await getQuoteWithFallback(yahooSymbol, '1y');
+        } catch {
+          // Still failing — return a clear, actionable error instead of a 500.
+          return NextResponse.json<ApiResult<never>>({
+            success: false,
+            error: 'Yahoo Finance is rate-limiting this server. Please try again in a minute or two.',
+          }, { status: 503 });
+        }
+      } else {
+        throw firstErr;
+      }
+    }
     const klines = quote.klines || [];
 
     if (klines.length < 50) {
@@ -70,7 +94,13 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
           jsonMode: true,
           maxTokens: 400,
         });
-        const parsed = JSON.parse(result.content);
+        // Robust JSON extraction — Pollinations (and other LLMs) often wrap
+        // JSON in markdown fences or add preamble even with json_mode on.
+        const parsed = extractJsonObject<{ score?: number; direction?: string; rationale?: string; confidence?: number }>(result.content);
+        if (!parsed) {
+          console.error('[markets/scan] LLM returned unparseable JSON, falling back to deterministic layer. Raw content (first 200 chars):', result.content.slice(0, 200));
+          throw new Error('LLM JSON extraction failed');
+        }
         llmAnalysis = {
           score: typeof parsed.score === 'number' ? parsed.score : techSummary.score,
           rationale: parsed.rationale || 'No rationale provided.',
@@ -88,7 +118,7 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
       }
     }
 
-    // Consensus (no orderbook/funding for non-crypto — technical + LLM only)
+    // Consensus (no orderbook/funding for non-crypto — technical + LLM + contrarian)
     const consensus = computeConsensus(
       {
         asset: asset.symbol,
@@ -96,6 +126,8 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
         price,
         technical: indicators,
         llmAnalysis,
+        // Pass klines so the contrarian layer can detect divergences + traps
+        klines,
       },
       llmLayer
     );
