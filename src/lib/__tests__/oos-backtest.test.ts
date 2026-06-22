@@ -7,7 +7,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { runBacktest, PRESET_STRATEGIES } from '@/lib/analysis/backtest';
-import { deflatedSharpeRatio, moments } from '@/lib/analysis/deflated-sharpe';
+import { deflatedSharpeRatio, moments, dsrVerdict } from '@/lib/analysis/deflated-sharpe';
 import type { Kline } from '@/lib/types';
 
 // Generate 365 daily klines with realistic crypto-like price action.
@@ -128,6 +128,19 @@ describe('OOS backtest harness — baseline', () => {
       const m = runOOS(s.key, TRAIN_KLINES);
       console.log(`[TRAIN] ${s.key}: Sharpe=${m.sharpe.toFixed(3)}, trades=${m.totalTrades}`);
       expect(m.totalTrades).toBeGreaterThan(0);
+    }
+  });
+
+  test('DSR gate: all 3 presets have DSR < 0.95 (would be rejected)', () => {
+    // This test pins the fact that NONE of the current preset strategies
+    // would survive the DSR < 0.95 acceptance gate. This is the honest truth —
+    // the strategies don't have enough trades or edge to be deployable.
+    for (const s of PRESET_STRATEGIES) {
+      const m = runOOS(s.key, TEST_KLINES);
+      const verdict = dsrVerdict(m.dsr);
+      console.log(`[DSR GATE] ${s.key}: DSR=${m.dsr.toFixed(3)}, verdict=${verdict}`);
+      // All should be below 0.95 — if any passes, the test should flag it.
+      expect(m.dsr).toBeLessThan(0.95);
     }
   });
 });
