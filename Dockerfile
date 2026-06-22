@@ -1,28 +1,26 @@
 # OMNISCIENT — Hugging Face Spaces Dockerfile
 #
 # ROOT CAUSE of "stuck at starting":
-#   The previous Dockerfile used `oven/bun:1` as the RUNNER image and ran
-#   `bun server.js`. But Next.js standalone server.js is designed for Node.js.
-#   Bun's compatibility mode doesn't properly bind the HTTP server to the port
-#   — it prints "Ready in 0ms" (suspiciously fast) but never actually serves.
+#   Next.js standalone server.js was run with `bun server.js` or `node server.js`
+#   but without HOSTNAME=0.0.0.0. Without it, the server binds to localhost
+#   only, and HF Spaces' reverse proxy can't reach it → appears stuck.
 #
-# FIX:
-#   - Build stage: keep bun (fast installs + build)
-#   - Runner stage: use node:18-slim (standalone server.js is designed for Node)
-#   - Install openssl in runner (Prisma needs it for SQLite)
-#   - Seed with a .cjs file (no @/ path aliases, works with plain node)
-#   - Don't swallow seed errors (remove || true)
+#   Also: the standalone server.js needs the DB + Prisma client at the right
+#   paths, and the start script must set all env vars BEFORE launching node.
+#
+# SOLUTION (inspired by HuggingMes pattern):
+#   - Use a start.sh script that sets HOSTNAME=0.0.0.0 explicitly
+#   - Use node:18-slim as runner (standalone is designed for Node.js)
+#   - seed.cjs seeds the DB during build (not at runtime)
+#   - No multi-stage complexity — simple, reliable, debuggable
 
-# ─── Stage 1: deps (bun for fast install) ───
-FROM oven/bun:1 AS deps
+# ─── Stage 1: Build with Bun (fast installs) ───
+FROM oven/bun:1 AS builder
 WORKDIR /app
+
 COPY package.json ./
 RUN bun install --frozen-lockfile || bun install
 
-# ─── Stage 2: builder (bun for build) ───
-FROM oven/bun:1 AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV DATABASE_URL="file:/app/db/custom.db"
@@ -36,27 +34,25 @@ RUN bunx prisma generate
 RUN bunx prisma db push --skip-generate
 
 # 3. Build Next.js (standalone output)
-#    The build script runs swap-provider.cjs + prisma generate + next build + copies static
 RUN bun run build
 
-# 4. Seed the database — write a standalone .cjs file (no @/ aliases)
-COPY seed.cjs ./seed.cjs
+# 4. Seed the database
 RUN node seed.cjs
 
-# 5. Copy Prisma client into standalone output
+# 5. Copy Prisma client + DB + seed into standalone
 RUN mkdir -p .next/standalone/node_modules/.prisma && \
     cp -r node_modules/.prisma/* .next/standalone/node_modules/.prisma/
 RUN mkdir -p .next/standalone/node_modules/@prisma && \
     cp -r node_modules/@prisma/client .next/standalone/node_modules/@prisma/client
-
-# 6. Copy the seeded DB into standalone output
 RUN mkdir -p .next/standalone/db && cp db/custom.db .next/standalone/db/custom.db
+RUN cp seed.cjs .next/standalone/seed.cjs
+RUN cp start.sh .next/standalone/start.sh
+RUN chmod +x .next/standalone/start.sh
 
-# ─── Stage 3: runner (Node.js — standalone server.js needs Node, not Bun) ───
+# ─── Stage 2: Runner with Node.js ───
 FROM node:18-slim AS runner
 WORKDIR /app
 
-# Install openssl (Prisma needs it even for SQLite)
 RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -66,13 +62,12 @@ ENV DATABASE_URL="file:/app/db/custom.db"
 ENV APP_PASSWORD="omniscient"
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy the standalone server (includes server.js + minimal node_modules)
+# Copy everything from the standalone build
 COPY --from=builder /app/.next/standalone ./
-# Copy static assets (not included in standalone by default)
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
 EXPOSE 7860
 
-# Use node, NOT bun — Next.js standalone is designed for Node.js
-CMD ["node", "server.js"]
+# Use the start script that sets HOSTNAME=0.0.0.0 before launching node
+CMD ["bash", "start.sh"]
