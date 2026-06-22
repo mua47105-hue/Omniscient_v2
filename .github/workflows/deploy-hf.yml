@@ -78,8 +78,8 @@ jobs:
           cp $GITHUB_WORKSPACE/tailwind.config.ts ./tailwind.config.ts 2>/dev/null
           cp $GITHUB_WORKSPACE/next-env.d.ts ./next-env.d.ts 2>/dev/null
 
-          # Create .gitignore for HF
-          echo -e "node_modules/\n.next/\ndb/\n*.db\n.env\nbun.lock" > .gitignore
+          # Create .gitignore for HF (use /db/ not db/ — db/ would also exclude src/lib/db/)
+          echo -e "node_modules/\n.next/\n/db/\n*.db\n.env\nbun.lock" > .gitignore
 
           # Commit + push to HF
           git add -A
