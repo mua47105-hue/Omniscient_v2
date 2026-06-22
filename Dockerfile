@@ -1,70 +1,78 @@
 # OMNISCIENT — Hugging Face Spaces Dockerfile
-# Multi-stage build: install → build → seed → minimal runtime
-# Runs on port 7860 (HF Spaces default)
+#
+# ROOT CAUSE of "stuck at starting":
+#   The previous Dockerfile used `oven/bun:1` as the RUNNER image and ran
+#   `bun server.js`. But Next.js standalone server.js is designed for Node.js.
+#   Bun's compatibility mode doesn't properly bind the HTTP server to the port
+#   — it prints "Ready in 0ms" (suspiciously fast) but never actually serves.
+#
+# FIX:
+#   - Build stage: keep bun (fast installs + build)
+#   - Runner stage: use node:18-slim (standalone server.js is designed for Node)
+#   - Install openssl in runner (Prisma needs it for SQLite)
+#   - Seed with a .cjs file (no @/ path aliases, works with plain node)
+#   - Don't swallow seed errors (remove || true)
 
-# ─── Stage 1: deps ───
+# ─── Stage 1: deps (bun for fast install) ───
 FROM oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json ./
 RUN bun install --frozen-lockfile || bun install
 
-# ─── Stage 2: builder ───
+# ─── Stage 2: builder (bun for build) ───
 FROM oven/bun:1 AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
 ENV DATABASE_URL="file:/app/db/custom.db"
 ENV APP_PASSWORD="omniscient"
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Generate Prisma client + create DB
+# 1. Generate Prisma client
 RUN bunx prisma generate
+
+# 2. Create the SQLite database + tables
 RUN bunx prisma db push --skip-generate
 
-# Build Next.js (standalone output)
+# 3. Build Next.js (standalone output)
+#    The build script runs swap-provider.cjs + prisma generate + next build + copies static
 RUN bun run build
 
-# Seed the database using an inline script (avoids @/ path alias issues with bun run)
-RUN bun -e "\
-  const { PrismaClient } = require('@prisma/client'); \
-  const db = new PrismaClient(); \
-  async function main() { \
-    console.log('Seeding...'); \
-    const p = await db.llmProvider.create({ data: { name: 'Pollinations', baseUrl: 'https://text.pollinations.ai/openai', apiKey: 'pollinations-free', notes: 'Free LLM, no key', isActive: true, models: { create: [{ modelId: 'openai', displayName: 'OpenAI (gpt-oss-20b)', contextWindow: 128000, freeTierRpm: 60 }] } } }).catch(() => null); \
-    if (p) { const m = await db.llmModel.findFirst({ where: { providerId: p.id } }); \
-      if (m) { for (const c of [{ moduleKey: 'crypto_technical', layer: 'deep_reasoning' }, { moduleKey: 'news_sentiment', layer: 'sentiment' }, { moduleKey: 'macro_analysis', layer: 'macro' }]) { await db.moduleModelConfig.upsert({ where: { moduleKey_layer: c }, create: { ...c, modelId: m.id, providerId: p.id, temperature: 0.3, enabled: true }, update: {} }); } } \
-    console.log('Pollinations seeded'); } \
-    const assets = [{ symbol: 'BTCUSDT', name: 'Bitcoin', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'ETHUSDT', name: 'Ethereum', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'SOLUSDT', name: 'Solana', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'BNBUSDT', name: 'BNB', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'XRPUSDT', name: 'XRP', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'ADAUSDT', name: 'Cardano', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'DOGEUSDT', name: 'Dogecoin', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'AVAXUSDT', name: 'Avalanche', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'LINKUSDT', name: 'Chainlink', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'MATICUSDT', name: 'Polygon', assetClass: 'crypto', exchange: 'binance' }, { symbol: 'POLUSDT', name: 'Polygon', assetClass: 'crypto', exchange: 'binance' }]; \
-    for (const a of assets) await db.asset.upsert({ where: { symbol: a.symbol }, create: { ...a, meta: '{}' }, update: {} }); \
-    console.log(assets.length + ' assets seeded'); \
-    await db.watchlist.upsert({ where: { name: 'Crypto Top 10' }, create: { name: 'Crypto Top 10', assetClass: 'crypto', symbols: JSON.stringify(assets.map(a => a.symbol)) }, update: {} }); \
-    await db.setting.upsert({ where: { key: 'default_threshold' }, create: { key: 'default_threshold', value: JSON.stringify({ minConviction: 60, directions: ['long', 'short'] }) }, update: {} }); \
-    await db.setting.upsert({ where: { key: 'alert_thresholds' }, create: { key: 'alert_thresholds', value: '{}' }, update: {} }); \
-    for (const j of [{ moduleKey: 'crypto_technical', cronExpr: '*/15 * * * *', enabled: true }, { moduleKey: 'news_sentiment', cronExpr: '*/30 * * * *', enabled: false }, { moduleKey: 'macro_analysis', cronExpr: '0 * * * *', enabled: false }]) { await db.scheduleJob.upsert({ where: { moduleKey: j.moduleKey }, create: j, update: { enabled: j.enabled } }); } \
-    console.log('Seed complete!'); \
-  } \
-  main().catch(e => { console.error(e); }).finally(() => db.\$disconnect()); \
-"
+# 4. Seed the database — write a standalone .cjs file (no @/ aliases)
+COPY seed.cjs ./seed.cjs
+RUN node seed.cjs
 
-# Copy Prisma client + DB to standalone
-RUN cp -r node_modules/.prisma .next/standalone/node_modules/.prisma 2>/dev/null; true
-RUN cp -r node_modules/@prisma .next/standalone/node_modules/@prisma 2>/dev/null; true
-RUN cp -r db .next/standalone/db 2>/dev/null; true
+# 5. Copy Prisma client into standalone output
+RUN mkdir -p .next/standalone/node_modules/.prisma && \
+    cp -r node_modules/.prisma/* .next/standalone/node_modules/.prisma/
+RUN mkdir -p .next/standalone/node_modules/@prisma && \
+    cp -r node_modules/@prisma/client .next/standalone/node_modules/@prisma/client
 
-# ─── Stage 3: runner ───
-FROM oven/bun:1 AS runner
+# 6. Copy the seeded DB into standalone output
+RUN mkdir -p .next/standalone/db && cp db/custom.db .next/standalone/db/custom.db
+
+# ─── Stage 3: runner (Node.js — standalone server.js needs Node, not Bun) ───
+FROM node:18-slim AS runner
 WORKDIR /app
+
+# Install openssl (Prisma needs it even for SQLite)
+RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV PORT=7860
 ENV HOSTNAME=0.0.0.0
 ENV DATABASE_URL="file:/app/db/custom.db"
 ENV APP_PASSWORD="omniscient"
+ENV NEXT_TELEMETRY_DISABLED=1
 
+# Copy the standalone server (includes server.js + minimal node_modules)
 COPY --from=builder /app/.next/standalone ./
+# Copy static assets (not included in standalone by default)
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/db ./db
 
 EXPOSE 7860
-CMD ["bun", "server.js"]
+
+# Use node, NOT bun — Next.js standalone is designed for Node.js
+CMD ["node", "server.js"]

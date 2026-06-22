@@ -3,8 +3,8 @@ node_modules
 dev.log
 server.log
 scheduler.log
-db/*.db
-db/*.db-journal
+*.db
+*.db-journal
 .env
 .env.local
 skills
@@ -17,4 +17,3 @@ bun.lock
 tsconfig.tsbuildinfo
 worklog.md
 .git
-.gitignore
