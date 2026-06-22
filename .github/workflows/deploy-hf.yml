@@ -1,0 +1,87 @@
+# GitHub Actions workflow — auto-deploy OMNISCIENT to Hugging Face Spaces
+#
+# This workflow triggers on every push to main. It:
+#   1. Checks out the repo
+#   2. Pushes the code to your Hugging Face Space (tskkkk/omniscient)
+#   3. HF Spaces auto-builds the Dockerfile and deploys
+#
+# PREREQUISITES (do these once, manually):
+#   1. Create a Hugging Face account (username: tskkkk)
+#   2. Create a new Space: https://huggingface.co/new-space
+#      - Name: omniscient
+#      - SDK: Docker
+#      - License: MIT
+#   3. Generate a HF access token: https://huggingface.co/settings/tokens
+#      - Type: Write (needed to push to the Space)
+#   4. Add the token as a GitHub Secret:
+#      - Go to: GitHub repo → Settings → Secrets and variables → Actions
+#      - Add secret: HF_TOKEN = <your-hf-write-token>
+#   5. Push to main — the workflow runs automatically
+
+name: Deploy to Hugging Face Spaces
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Configure Git for HF
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Push to Hugging Face Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Clone the HF Space repo (empty or existing)
+          git clone https://tskkkk:${HF_TOKEN}@huggingface.co/spaces/tskkkk/omniscient hf-space || true
+
+          # If clone failed (new empty space), init fresh
+          if [ ! -d hf-space ]; then
+            mkdir hf-space
+            cd hf-space
+            git init
+            git remote add origin https://tskkkk:${HF_TOKEN}@huggingface.co/spaces/tskkkk/omniscient
+          else
+            cd hf-space
+            # Clean old files
+            rm -rf src prisma mini-services public scripts Dockerfile .dockerignore .env.example README.md package.json next.config.ts postcss.config.mjs tsconfig.json eslint.config.mjs components.json tailwind.config.ts next-env.d.ts 2>/dev/null
+          fi
+
+          # Copy all source files from GitHub checkout
+          cp -r $GITHUB_WORKSPACE/src ./src
+          cp -r $GITHUB_WORKSPACE/prisma ./prisma
+          cp -r $GITHUB_WORKSPACE/mini-services ./mini-services
+          cp -r $GITHUB_WORKSPACE/public ./public
+          cp -r $GITHUB_WORKSPACE/scripts ./scripts
+          cp $GITHUB_WORKSPACE/Dockerfile ./Dockerfile
+          cp $GITHUB_WORKSPACE/.dockerignore ./.dockerignore
+          cp $GITHUB_WORKSPACE/.env.example ./.env.example
+          cp $GITHUB_WORKSPACE/README.md ./README.md
+          cp $GITHUB_WORKSPACE/package.json ./package.json
+          cp $GITHUB_WORKSPACE/next.config.ts ./next.config.ts
+          cp $GITHUB_WORKSPACE/postcss.config.mjs ./postcss.config.mjs
+          cp $GITHUB_WORKSPACE/tsconfig.json ./tsconfig.json
+          cp $GITHUB_WORKSPACE/eslint.config.mjs ./eslint.config.mjs
+          cp $GITHUB_WORKSPACE/components.json ./components.json
+          cp $GITHUB_WORKSPACE/tailwind.config.ts ./tailwind.config.ts 2>/dev/null
+          cp $GITHUB_WORKSPACE/next-env.d.ts ./next-env.d.ts 2>/dev/null
+
+          # Create .gitignore for HF
+          echo -e "node_modules/\n.next/\ndb/\n*.db\n.env\nbun.lock" > .gitignore
+
+          # Commit + push to HF
+          git add -A
+          git commit -m "Auto-deploy from GitHub: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git push https://tskkkk:${HF_TOKEN}@huggingface.co/spaces/tskkkk/omniscient main
