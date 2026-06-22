@@ -19,8 +19,10 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Redirect to lock page using the origin
-  return NextResponse.redirect(new URL('/lock', origin));
+  // Rewrite to lock page (200 status, NOT 307 redirect)
+  // A 307 redirect causes HF Spaces health check to think the app isn't ready.
+  // A rewrite serves the /lock page content at the original URL with 200 OK.
+  return NextResponse.rewrite(new URL('/lock', origin));
 }
 
 export const config = {
