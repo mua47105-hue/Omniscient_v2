@@ -93,7 +93,9 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
           temperature: llmCfg.temperature,
           jsonMode: true,
           maxTokens: 400,
-        });
+          _module: 'macro_analysis',
+          _asset: asset.symbol,
+        } as any);
         // Robust JSON extraction — Pollinations (and other LLMs) often wrap
         // JSON in markdown fences or add preamble even with json_mode on.
         const parsed = extractJsonObject<{ score?: number; direction?: string; rationale?: string; confidence?: number }>(result.content);

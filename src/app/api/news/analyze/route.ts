@@ -183,7 +183,8 @@ export async function POST(req: NextRequest) {
         temperature: cfg.temperature ?? 0.2,
         jsonMode: true,
         maxTokens: 2000,
-      });
+        _module: 'news_sentiment',
+      } as any);
     } catch (e: any) {
       const resp: NotAnalyzedResponse = {
         analyzed: false,

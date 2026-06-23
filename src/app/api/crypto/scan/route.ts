@@ -58,7 +58,9 @@ Give a concise trading read for the next ${interval} timeframe. Respond as JSON 
           temperature: llmCfg.temperature,
           jsonMode: true,
           maxTokens: 400,
-        });
+          _module: 'crypto_technical',
+          _asset: symbol,
+        } as any);
         // Robust JSON extraction — Pollinations (and other LLMs) often wrap
         // JSON in markdown fences or add preamble even with json_mode on.
         // Falls back to the deterministic technical score if extraction fails.

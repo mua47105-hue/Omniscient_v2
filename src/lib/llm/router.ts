@@ -7,6 +7,7 @@
 import https from 'node:https';
 import { db } from '@/lib/db';
 import { sanitizeApiKey, parseKeys } from '@/lib/llm/router-helpers';
+import { logLlmActivity } from '@/lib/llm/activity';
 import type { LlmCompletionRequest, LlmCompletionResponse, LlmMessage } from '@/lib/types';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
@@ -447,9 +448,25 @@ export async function complete(req: LlmCompletionRequest): Promise<LlmCompletion
 export async function completeWithAutoFallback(
   req: LlmCompletionRequest
 ): Promise<LlmCompletionResponse & { usedProvider?: string; usedModel?: string; fallbackUsed?: boolean }> {
+  const moduleKey = (req as any)._module || 'unknown';
+  const assetSymbol = (req as any)._asset;
+  const startTime = Date.now();
+
   // Try the requested provider first
   try {
     const result = await complete(req);
+    logLlmActivity({
+      provider: req.provider,
+      model: req.model,
+      module: moduleKey,
+      asset: assetSymbol,
+      latencyMs: result.latencyMs,
+      success: true,
+      fallbackUsed: false,
+      promptTokens: result.usage?.promptTokens,
+      completionTokens: result.usage?.completionTokens,
+      contentPreview: result.content?.slice(0, 80),
+    });
     return { ...result, usedProvider: req.provider, usedModel: req.model, fallbackUsed: false };
   } catch (primaryErr: any) {
     console.log(`[llm] Primary provider ${req.provider} failed: ${primaryErr.message.slice(0, 100)} — trying fallbacks...`);
@@ -461,47 +478,78 @@ export async function completeWithAutoFallback(
     });
 
     // Sort fallback providers by reliability priority.
-    // Providers known to work reliably from this server come first; providers
-    // that are frequently IP-blocked or rate-limited come last. This minimizes
-    // the time spent in the fallback chain before reaching a working provider.
     const PRIORITY: Record<string, number> = {
-      'Pollinations': 1,  // completely free, no API key, always available (~800ms)
-      'Mistral': 2,       // works reliably (~700ms)
-      'NVIDIA NIM': 3,    // works with llama-3.3-70b (~200ms)
-      'OpenRouter': 4,    // works with paid llama-3.3-70b (~400ms)
-      'Cerebras': 5,      // ultra-fast when configured (1000+ tok/s)
-      'AIMLAPI': 6,       // 400+ models when configured
-      'SiliconFlow': 7,   // open-source models when configured
-      'Hugging Face': 8,  // free tier when configured
-      'xAI Grok': 9,      // free $25 credit when configured
-      'Gemini': 10,       // often 429 (quota) or 400 (geo-block)
-      'Groq': 11,         // 403 Cloudflare IP block from datacenter IPs
+      'Pollinations': 1,
+      'Mistral': 2,
+      'NVIDIA NIM': 3,
+      'OpenRouter': 4,
+      'Cerebras': 5,
+      'AIMLAPI': 6,
+      'SiliconFlow': 7,
+      'Hugging Face': 8,
+      'xAI Grok': 9,
+      'Gemini': 10,
+      'Groq': 11,
+      'DeepSeek': 12,
+      'Together AI': 13,
     };
     const sorted = [...allProviders].sort((a, b) => (PRIORITY[a.name] ?? 99) - (PRIORITY[b.name] ?? 99));
 
     for (const p of sorted) {
       if (p.models.length === 0) continue;
-      // Skip providers with placeholder keys — UNLESS an env-var override exists.
-      // HF Space Secrets can set provider keys that override the DB placeholders.
       const envKeyName = ENV_KEY_FOR_PROVIDER_STATIC[p.name];
       const hasEnvOverride = envKeyName && process.env[envKeyName] && !process.env[envKeyName]!.startsWith('PASTE_');
       if (!hasEnvOverride && (p.apiKey.startsWith('PASTE_') || p.apiKey.startsWith('YOUR_'))) continue;
       try {
         const result = await callProvider(p, p.models[0].modelId, req.messages, req);
         console.log(`[llm] Fallback to ${p.name}/${p.models[0].modelId} succeeded`);
+        logLlmActivity({
+          provider: p.name,
+          model: p.models[0].modelId,
+          module: moduleKey,
+          asset: assetSymbol,
+          latencyMs: result.latencyMs,
+          success: true,
+          fallbackUsed: true,
+          primaryProvider: req.provider,
+          promptTokens: result.usage?.promptTokens,
+          completionTokens: result.usage?.completionTokens,
+          contentPreview: result.content?.slice(0, 80),
+        });
         return {
           ...result,
-          model: result.model, // keep original model name
+          model: result.model,
           usedProvider: p.name,
           usedModel: p.models[0].modelId,
           fallbackUsed: true,
         };
       } catch (e: any) {
         console.log(`[llm] Fallback ${p.name} also failed: ${e.message.slice(0, 80)}`);
+        logLlmActivity({
+          provider: p.name,
+          model: p.models[0].modelId,
+          module: moduleKey,
+          asset: assetSymbol,
+          latencyMs: 0,
+          success: false,
+          error: e.message?.slice(0, 120),
+          fallbackUsed: true,
+          primaryProvider: req.provider,
+        });
       }
     }
 
-    // All providers failed — throw the original error
+    // All providers failed — log the primary failure
+    logLlmActivity({
+      provider: req.provider,
+      model: req.model,
+      module: moduleKey,
+      asset: assetSymbol,
+      latencyMs: Date.now() - startTime,
+      success: false,
+      error: primaryErr.message?.slice(0, 120),
+      fallbackUsed: false,
+    });
     throw primaryErr;
   }
 }

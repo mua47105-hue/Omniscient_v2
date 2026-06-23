@@ -193,7 +193,9 @@ async function analyzeAsset(
             { role: 'user', content: prompt },
           ],
           temperature: llmCfg!.temperature, maxTokens,
-        });
+          _module: 'brain',
+          _asset: asset.symbol,
+        } as any);
         // jsonMode is intentionally OFF: Pollinations (the default free LLM)
         // returns empty when response_format is set. The prompt requests JSON
         // explicitly + safeParseJson handles any prose wrapping. This keeps the
