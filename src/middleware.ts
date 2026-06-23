@@ -15,11 +15,12 @@ import { NextRequest, NextResponse } from 'next/server';
 // The scheduler mini-service sends `X-Cron-Secret: <CRON_SECRET>` so it can
 // POST to /api/scheduler/tick without a browser cookie.
 
-// Routes that don't require auth: login, logout, and the health check.
+// Routes that don't require auth: login, logout, health, and setup (bootstrap).
 const PUBLIC_API_ALLOWLIST = [
   '/api/auth/login',
   '/api/auth/logout',
   '/api/health',
+  '/api/setup',
 ];
 
 /** Check if a request has a valid cron-secret header (for the scheduler service). */

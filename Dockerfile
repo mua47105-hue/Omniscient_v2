@@ -34,6 +34,8 @@ RUN bun install --frozen-lockfile || bun install
 COPY . .
 
 # Set env defaults (HF Space Secrets/Variables override these at runtime)
+# DATABASE_URL: defaults to /data/custom.db (persistent if bucket mounted).
+# Falls back to /app/data/custom.db if /data isn't writable (no bucket).
 ENV DATABASE_URL="file:/data/custom.db"
 ENV APP_PASSWORD="omniscient"
 ENV PORT=7860
@@ -91,7 +93,9 @@ bunx prisma db push --skip-generate --accept-data-loss 2>/dev/null || {
   }
 }
 
-# Seed ONLY if the DB file is missing or empty (first run)
+# Seed ONLY if the DB file is missing/empty OR if the DB has no providers
+# (handles the case where /data is ephemeral and gets wiped, or where
+# prisma db push created the schema but no data was seeded)
 SHOULD_SEED=0
 if [ -z "$DB_FILE" ]; then
   SHOULD_SEED=1
@@ -103,14 +107,31 @@ elif [ ! -s "$DB_FILE" ]; then
   SHOULD_SEED=1
 fi
 
+# Always check if the DB has providers — if not, seed (handles ephemeral
+# /data that gets wiped on restart but the file happens to exist)
+if [ "$SHOULD_SEED" = "0" ]; then
+  PROVIDER_COUNT=$(node -e "
+    try {
+      const { PrismaClient } = require('@prisma/client');
+      const db = new PrismaClient();
+      db.llmProvider.count().then(c => { console.log(c); db.\$disconnect(); }).catch(() => { console.log(0); db.\$disconnect(); });
+    } catch(e) { console.log(0); }
+  " 2>/dev/null || echo "0")
+  echo "[entrypoint] Provider count in DB: $PROVIDER_COUNT"
+  if [ "$PROVIDER_COUNT" = "0" ] || [ -z "$PROVIDER_COUNT" ]; then
+    echo "[entrypoint] DB has no providers — seeding defaults..."
+    SHOULD_SEED=1
+  fi
+fi
+
 if [ "$SHOULD_SEED" = "1" ]; then
   echo "[entrypoint] Running seed script..."
-  node seed.cjs 2>/dev/null || {
+  node seed.cjs 2>&1 || {
     echo "[entrypoint] seed.cjs failed — app will start but may need manual setup"
   }
   echo "[entrypoint] Seed complete."
 else
-  echo "[entrypoint] DB exists at $DB_FILE — skipping seed (preserving user data)."
+  echo "[entrypoint] DB exists at $DB_FILE with data — skipping seed (preserving user data)."
 fi
 
 echo "[entrypoint] Starting app: $@"

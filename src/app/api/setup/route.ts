@@ -1,47 +1,76 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { PROVIDER_PRESETS } from '@/lib/llm/presets';
+import { safeError } from '@/lib/security/redact';
 import type { ApiResult } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 // GET /api/setup — seeds the database with default providers, assets, and watchlists.
-// Call this once after deploying to Vercel with DATABASE_URL set to Supabase.
-export async function GET() {
+// Query params:
+//   ?force=1  — re-seed even if providers already exist (adds missing presets)
+// Call this once after deploying, or whenever the DB is empty.
+export async function GET(req: NextRequest) {
   try {
+    const force = req.nextUrl.searchParams.get('force') === '1';
     const results: string[] = [];
 
-    // Check if already seeded
     const providerCount = await db.llmProvider.count();
-    if (providerCount > 0) {
+    if (providerCount > 0 && !force) {
       return NextResponse.json<ApiResult<{ ok: boolean; message: string }>>({
         success: true,
-        data: { ok: true, message: `Database already seeded (${providerCount} providers found).` },
+        data: { ok: true, message: `Database already seeded (${providerCount} providers). Use ?force=1 to add missing presets.` },
       });
     }
 
-    // Seed LLM providers
-    const providers = [
-      { name: 'Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'PASTE_YOUR_GEMINI_API_KEY', notes: 'Google Gemini API', models: [{ modelId: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', contextWindow: 1048576, freeTierRpm: 10 }] },
-      { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'PASTE_YOUR_GROQ_API_KEY', notes: 'Groq ultra-fast inference', models: [{ modelId: 'llama-3.3-70b-versatile', displayName: 'Llama 3.3 70B', contextWindow: 128000, freeTierRpm: 30 }] },
-      { name: 'NVIDIA NIM', baseUrl: 'https://integrate.api.nvidia.com/v1', apiKey: 'PASTE_YOUR_NVIDIA_API_KEY', notes: 'NVIDIA NIM large models', models: [{ modelId: 'meta/llama-3.3-70b-instruct', displayName: 'Llama 3.3 70B', contextWindow: 128000, freeTierRpm: 40 }] },
-      { name: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', apiKey: 'PASTE_YOUR_MISTRAL_API_KEY', notes: 'Mistral AI', models: [{ modelId: 'mistral-large-latest', displayName: 'Mistral Large', contextWindow: 128000, freeTierRpm: 10 }] },
-      { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'PASTE_YOUR_OPENROUTER_API_KEY', notes: 'OpenRouter aggregates many providers', models: [{ modelId: 'meta-llama/llama-3.3-70b-instruct', displayName: 'Llama 3.3 70B', contextWindow: 128000, freeTierRpm: 50 }] },
-      { name: 'Pollinations', baseUrl: 'https://text.pollinations.ai/openai', apiKey: 'free-no-key-needed', notes: 'Completely free, NO API key required', models: [{ modelId: 'openai-fast', displayName: 'GPT-OSS 20B Fast', contextWindow: 32000, freeTierRpm: 50 }] },
-    ];
-
-    for (const p of providers) {
+    // Seed all provider presets from the catalog
+    for (const preset of PROVIDER_PRESETS) {
+      const existing = await db.llmProvider.findUnique({ where: { name: preset.name } });
+      if (existing) {
+        results.push(`Provider ${preset.name}: already exists`);
+        continue;
+      }
       const created = await db.llmProvider.create({
         data: {
-          name: p.name,
-          baseUrl: p.baseUrl,
-          apiKey: p.apiKey,
-          isActive: true,
-          notes: p.notes,
-          models: { create: p.models.map(m => ({ ...m, isActive: true, capabilities: '["text","json"]' })) },
+          name: preset.name,
+          baseUrl: preset.baseUrl,
+          apiKey: preset.apiKeyPlaceholder,
+          isActive: preset.free, // Pollinations is active by default (no key needed)
+          notes: preset.notes,
+          models: {
+            create: preset.models.map(m => ({
+              modelId: m.modelId,
+              displayName: m.displayName,
+              contextWindow: m.contextWindow,
+              freeTierRpm: m.freeTierRpm,
+              isActive: true,
+              capabilities: '["text","json"]',
+            })),
+          },
         },
       });
-      results.push(`Provider: ${created.name}`);
+      results.push(`Provider: ${created.name} (${preset.free ? 'active' : 'inactive'})`);
+    }
+
+    // Wire module configs to Pollinations (the default free provider)
+    const pollinations = await db.llmProvider.findUnique({ where: { name: 'Pollinations' } });
+    if (pollinations) {
+      const m = await db.llmModel.findFirst({ where: { providerId: pollinations.id } });
+      if (m) {
+        for (const c of [
+          { moduleKey: 'crypto_technical', layer: 'deep_reasoning' },
+          { moduleKey: 'news_sentiment', layer: 'sentiment' },
+          { moduleKey: 'macro_analysis', layer: 'macro' },
+        ]) {
+          await db.moduleModelConfig.upsert({
+            where: { moduleKey_layer: c },
+            create: { ...c, modelId: m.id, providerId: pollinations.id, temperature: 0.3, enabled: true },
+            update: {},
+          });
+        }
+        results.push('Module configs wired to Pollinations');
+      }
     }
 
     // Seed crypto assets
@@ -55,6 +84,7 @@ export async function GET() {
       { symbol: 'DOGEUSDT', name: 'Dogecoin', assetClass: 'crypto', exchange: 'binance', meta: JSON.stringify({ coinId: 'dogecoin' }) },
       { symbol: 'AVAXUSDT', name: 'Avalanche', assetClass: 'crypto', exchange: 'binance', meta: JSON.stringify({ coinId: 'avalanche-2' }) },
       { symbol: 'LINKUSDT', name: 'Chainlink', assetClass: 'crypto', exchange: 'binance', meta: JSON.stringify({ coinId: 'chainlink' }) },
+      { symbol: 'MATICUSDT', name: 'Polygon', assetClass: 'crypto', exchange: 'binance', meta: JSON.stringify({ coinId: 'matic-network' }) },
       { symbol: 'POLUSDT', name: 'Polygon', assetClass: 'crypto', exchange: 'binance', meta: JSON.stringify({ coinId: 'matic-network' }) },
     ];
     for (const a of cryptoAssets) {
@@ -63,34 +93,38 @@ export async function GET() {
     results.push(`Assets: ${cryptoAssets.length} crypto`);
 
     // Seed watchlist
-    const existingWl = await db.watchlist.findUnique({ where: { name: 'Crypto Top 10' } });
-    if (!existingWl) {
-      await db.watchlist.create({
-        data: { name: 'Crypto Top 10', assetClass: 'crypto', symbols: JSON.stringify(cryptoAssets.map(a => a.symbol)), isActive: true },
-      });
-      results.push('Watchlist: Crypto Top 10');
-    }
+    await db.watchlist.upsert({
+      where: { name: 'Crypto Top 10' },
+      create: { name: 'Crypto Top 10', assetClass: 'crypto', symbols: JSON.stringify(cryptoAssets.map(a => a.symbol)), isActive: true },
+      update: {},
+    });
+    results.push('Watchlist: Crypto Top 10');
 
     // Seed schedule jobs
-    const jobs = [
-      { moduleKey: 'crypto_technical', cronExpr: '*/15 * * * *' },
-      { moduleKey: 'news_sentiment', cronExpr: '*/30 * * * *' },
-      { moduleKey: 'macro_analysis', cronExpr: '0 * * * *' },
-    ];
-    for (const j of jobs) {
-      await db.scheduleJob.upsert({ where: { moduleKey: j.moduleKey }, create: { ...j, enabled: false }, update: {} });
+    for (const j of [
+      { moduleKey: 'crypto_technical', cronExpr: '*/15 * * * *', enabled: true },
+      { moduleKey: 'news_sentiment', cronExpr: '*/30 * * * *', enabled: false },
+      { moduleKey: 'macro_analysis', cronExpr: '0 * * * *', enabled: false },
+    ]) {
+      await db.scheduleJob.upsert({
+        where: { moduleKey: j.moduleKey },
+        create: j,
+        update: {},
+      });
     }
-    results.push(`Schedule jobs: ${jobs.length}`);
+    results.push('Schedule jobs: 3');
 
     // Seed default settings
     await db.setting.upsert({ where: { key: 'default_threshold' }, create: { key: 'default_threshold', value: JSON.stringify({ minConviction: 60, directions: ['long', 'short'] }) }, update: {} });
-    results.push('Settings: default_threshold');
+    await db.setting.upsert({ where: { key: 'alert_thresholds' }, create: { key: 'alert_thresholds', value: '{}' }, update: {} });
+    results.push('Settings: defaults');
 
     return NextResponse.json<ApiResult<{ ok: boolean; results: string[] }>>({
       success: true,
       data: { ok: true, results },
     });
-  } catch (e: any) {
-    return NextResponse.json<ApiResult<never>>({ success: false, error: e.message }, { status: 500 });
+  } catch (e) {
+    const { status, error } = safeError(e, 'setup');
+    return NextResponse.json<ApiResult<never>>({ success: false, error }, { status });
   }
 }
