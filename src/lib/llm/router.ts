@@ -102,10 +102,11 @@ async function callOpenAICompatible(
   if (opts.jsonMode) body.response_format = { type: 'json_object' };
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-  // Sanitize the API key before putting it in the Authorization header —
-  // strip quotes, whitespace, and control chars that cause "Invalid character
-  // in header content" errors.
-  const safeKey = apiKey.replace(/^["'`]+|["'`]+$/g, '').replace(/[\x00-\x1F\x7F]/g, '').trim();
+  // Sanitize the API key before putting it in the Authorization header.
+  const safeKey = sanitizeApiKey(apiKey);
+  if (!safeKey) {
+    throw new Error('API key is empty after sanitization');
+  }
   const { status, text } = await nativeHttpsPost(
     url,
     {
@@ -185,7 +186,10 @@ async function callOpenRouter(
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   // Sanitize the API key (same as callOpenAICompatible)
-  const safeKey = apiKey.replace(/^["'`]+|["'`]+$/g, '').replace(/[\x00-\x1F\x7F]/g, '').trim();
+  const safeKey = sanitizeApiKey(apiKey);
+  if (!safeKey) {
+    throw new Error('API key is empty after sanitization');
+  }
   const { status, text } = await nativeHttpsPost(
     url,
     {
@@ -330,21 +334,34 @@ function keyHash(key: string): string {
 }
 
 /**
+ * Sanitize an API key for safe use in HTTP headers.
+ * Strips ALL non-ASCII characters, control characters, quotes, and whitespace
+ * that would cause "Invalid character in header content" errors.
+ * Only keeps ASCII printable characters (0x20-0x7E) except spaces.
+ */
+function sanitizeApiKey(key: string): string {
+  if (!key || typeof key !== 'string') return '';
+  return key
+    // Remove ALL non-ASCII characters (Unicode whitespace, BOM, zero-width chars, etc.)
+    .replace(/[^\x20-\x7E]/g, '')
+    // Remove control characters
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    // Strip surrounding quotes
+    .replace(/^["'`]+|["'`]+$/g, '')
+    // Remove any remaining spaces (API keys never contain spaces)
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+/**
  * Split a provider's apiKey field into individual keys (newline-separated).
- * Also sanitizes each key: strips quotes, whitespace, and control characters
- * that would cause "Invalid character in header content" errors when the key
- * is used in the Authorization header.
+ * Each key is sanitized to remove invalid header characters.
  */
 function parseKeys(apiKey: string): string[] {
   if (!apiKey || typeof apiKey !== 'string') return [];
   return apiKey
     .split('\n')
-    .map((k) => k.trim())
-    // Strip surrounding quotes (users sometimes paste "sk-or-..." with quotes)
-    .map((k) => k.replace(/^["'`]+|["'`]+$/g, ''))
-    // Remove any control characters / non-printable chars that break HTTP headers
-    .map((k) => k.replace(/[\x00-\x1F\x7F]/g, ''))
-    .map((k) => k.trim())
+    .map((k) => sanitizeApiKey(k))
     .filter((k) => k.length > 0 && !k.startsWith('PASTE_') && !k.startsWith('YOUR_'));
 }
 
@@ -393,11 +410,18 @@ async function callProvider(
   // in the UI.
   const envKeyName = ENV_KEY_FOR_PROVIDER_STATIC[provider.name];
   const envKey = envKeyName ? process.env[envKeyName] : undefined;
-  const effectiveApiKey = envKey && envKey.length > 0 && !envKey.startsWith('PASTE_') ? envKey : provider.apiKey;
+  // Sanitize the env var value (HF Secrets can have trailing newlines/whitespace)
+  const sanitizedEnvKey = envKey ? sanitizeApiKey(envKey) : '';
+  const effectiveApiKey = sanitizedEnvKey.length > 0 && !sanitizedEnvKey.startsWith('PASTE_') ? sanitizedEnvKey : provider.apiKey;
 
   const allKeys = parseKeys(effectiveApiKey);
   if (allKeys.length === 0) {
     throw new Error(`No API key configured for ${provider.name}` + (envKeyName ? ` (set ${envKeyName} as an HF Space Secret, or paste a key in Settings)` : ''));
+  }
+
+  // Debug log — show which key source is being used (first 8 chars only, for security)
+  if (envKeyName) {
+    console.log(`[llm] ${provider.name}: using ${sanitizedEnvKey.length > 0 ? 'env var' : 'DB'} key (starts with: ${allKeys[0].slice(0, 8)}..., length: ${allKeys[0].length})`);
   }
 
   // Try each available key in sequence. On 429, mark cooldown + try next.
