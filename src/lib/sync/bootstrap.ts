@@ -88,11 +88,23 @@ export async function bootstrapSettingsFromSupabase(): Promise<{ ok: boolean; sy
     }
 
     // 1. LlmProvider — upsert by NAME (natural unique key)
+    // CRITICAL: Don't overwrite a real API key with a placeholder from Supabase.
+    // If the local key is real (not PASTE_) and the Supabase key is a placeholder,
+    // keep the local key. This prevents the "401 after refresh" bug where the
+    // bootstrap pulls old placeholder keys from Supabase and overwrites the real
+    // key the user just saved.
     await syncTable(
       'LlmProvider',
       () => client.from('LlmProvider').select('*'),
       async (row: any) => {
-        // First try to find by name, then upsert by name
+        const existing = await db.llmProvider.findUnique({ where: { name: row.name } });
+
+        // If local row exists and has a REAL key, and Supabase has a PLACEHOLDER,
+        // don't overwrite the key — just update other fields.
+        const localKeyIsReal = existing && existing.apiKey && !existing.apiKey.startsWith('PASTE_') && !existing.apiKey.startsWith('YOUR_');
+        const supabaseKeyIsPlaceholder = !row.apiKey || row.apiKey.startsWith('PASTE_') || row.apiKey.startsWith('YOUR_');
+        const shouldKeepLocalKey = localKeyIsReal && supabaseKeyIsPlaceholder;
+
         await db.llmProvider.upsert({
           where: { name: row.name },
           create: {
@@ -105,7 +117,8 @@ export async function bootstrapSettingsFromSupabase(): Promise<{ ok: boolean; sy
           },
           update: {
             baseUrl: row.baseUrl,
-            apiKey: row.apiKey,
+            // Keep the local real key if Supabase has a placeholder
+            apiKey: shouldKeepLocalKey ? existing!.apiKey : row.apiKey,
             isActive: row.isActive ?? true,
             notes: row.notes,
           },
@@ -247,6 +260,16 @@ export async function bootstrapSettingsFromSupabase(): Promise<{ ok: boolean; sy
       'Setting',
       () => client.from('Setting').select('*'),
       async (row: any) => {
+        // Don't overwrite a real API key setting with a placeholder from Supabase
+        const existing = await db.setting.findUnique({ where: { key: row.key } });
+        if (existing) {
+          const localIsReal = !existing.value?.includes('PASTE_') && !existing.value?.includes('YOUR_');
+          const supabaseIsPlaceholder = (row.value || '').includes('PASTE_') || (row.value || '').includes('YOUR_');
+          if (localIsReal && supabaseIsPlaceholder) {
+            // Keep the local real value, skip this row
+            return;
+          }
+        }
         await db.setting.upsert({
           where: { key: row.key },
           create: {
