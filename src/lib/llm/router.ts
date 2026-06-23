@@ -6,6 +6,7 @@
 
 import https from 'node:https';
 import { db } from '@/lib/db';
+import { sanitizeApiKey, parseKeys } from '@/lib/llm/router-helpers';
 import type { LlmCompletionRequest, LlmCompletionResponse, LlmMessage } from '@/lib/types';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
@@ -333,37 +334,7 @@ function keyHash(key: string): string {
   return key.slice(-8); // last 8 chars is enough to distinguish keys
 }
 
-/**
- * Sanitize an API key for safe use in HTTP headers.
- * Strips ALL non-ASCII characters, control characters, quotes, and whitespace
- * that would cause "Invalid character in header content" errors.
- * Only keeps ASCII printable characters (0x20-0x7E) except spaces.
- */
-function sanitizeApiKey(key: string): string {
-  if (!key || typeof key !== 'string') return '';
-  return key
-    // Remove ALL non-ASCII characters (Unicode whitespace, BOM, zero-width chars, etc.)
-    .replace(/[^\x20-\x7E]/g, '')
-    // Remove control characters
-    .replace(/[\x00-\x1F\x7F]/g, '')
-    // Strip surrounding quotes
-    .replace(/^["'`]+|["'`]+$/g, '')
-    // Remove any remaining spaces (API keys never contain spaces)
-    .replace(/\s+/g, '')
-    .trim();
-}
-
-/**
- * Split a provider's apiKey field into individual keys (newline-separated).
- * Each key is sanitized to remove invalid header characters.
- */
-function parseKeys(apiKey: string): string[] {
-  if (!apiKey || typeof apiKey !== 'string') return [];
-  return apiKey
-    .split('\n')
-    .map((k) => sanitizeApiKey(k))
-    .filter((k) => k.length > 0 && !k.startsWith('PASTE_') && !k.startsWith('YOUR_'));
-}
+// sanitizeApiKey and parseKeys are now imported from @/lib/llm/router-helpers
 
 /** Get the list of available (non-cooling-down) keys for a provider. */
 function getAvailableKeys(providerName: string, apiKey: string): string[] {
@@ -395,10 +366,13 @@ const ENV_KEY_FOR_PROVIDER_STATIC: Record<string, string> = {
   'SiliconFlow': 'SILICONFLOW_API_KEY',
   'xAI Grok': 'XAI_API_KEY',
   'Hugging Face': 'HUGGINGFACE_API_KEY',
+  'DeepSeek': 'DEEPSEEK_API_KEY',
+  'Together AI': 'TOGETHER_API_KEY',
 };
 
-/** Call a specific provider+model (internal) — with multi-key rotation + env-var override. */
-async function callProvider(
+/** Call a specific provider+model (internal) — with multi-key rotation + env-var override.
+ *  Exported so the test endpoint can call it directly (bypassing the isActive check). */
+export async function callProvider(
   provider: { baseUrl: string; apiKey: string; name: string },
   modelId: string,
   messages: LlmMessage[],
