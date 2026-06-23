@@ -61,9 +61,18 @@ export async function POST(req: NextRequest) {
     };
     return NextResponse.json<ApiResult<TestResult>>({ success: true, data });
   } catch (e: any) {
-    // Surface the real error (403, 429, timeout, invalid key, etc.) so the
-    // user sees something actionable instead of a generic failure.
-    const msg = e?.message || String(e);
+    // Surface a clear, actionable error message
+    let msg = e?.message || String(e);
+
+    // If the error is about invalid header characters, explain what happened
+    if (msg.includes('Invalid character') && msg.includes('header')) {
+      msg = 'API key contains invalid characters (quotes, newlines, or control chars). Re-enter the key without quotes or extra whitespace.';
+    }
+    // If it's a "no API key" error, point the user to the right place
+    if (msg.includes('No API key configured')) {
+      msg += ' Paste a real API key in Settings → Providers, or set the env var as an HF Space Secret.';
+    }
+
     return NextResponse.json<ApiResult<never>>(
       { success: false, error: msg.slice(0, 300) },
       { status: 500 }

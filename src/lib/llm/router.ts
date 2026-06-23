@@ -102,11 +102,15 @@ async function callOpenAICompatible(
   if (opts.jsonMode) body.response_format = { type: 'json_object' };
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  // Sanitize the API key before putting it in the Authorization header —
+  // strip quotes, whitespace, and control chars that cause "Invalid character
+  // in header content" errors.
+  const safeKey = apiKey.replace(/^["'`]+|["'`]+$/g, '').replace(/[\x00-\x1F\x7F]/g, '').trim();
   const { status, text } = await nativeHttpsPost(
     url,
     {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${safeKey}`,
     },
     JSON.stringify(body)
   );
@@ -180,11 +184,13 @@ async function callOpenRouter(
   if (opts.jsonMode) body.response_format = { type: 'json_object' };
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  // Sanitize the API key (same as callOpenAICompatible)
+  const safeKey = apiKey.replace(/^["'`]+|["'`]+$/g, '').replace(/[\x00-\x1F\x7F]/g, '').trim();
   const { status, text } = await nativeHttpsPost(
     url,
     {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${safeKey}`,
       // OpenRouter-specific headers (recommended in their API docs)
       'HTTP-Referer': 'https://omniscient.app',
       'X-Title': 'OMNISCIENT Market Intel',
@@ -323,10 +329,21 @@ function keyHash(key: string): string {
   return key.slice(-8); // last 8 chars is enough to distinguish keys
 }
 
-/** Split a provider's apiKey field into individual keys (newline-separated). */
+/**
+ * Split a provider's apiKey field into individual keys (newline-separated).
+ * Also sanitizes each key: strips quotes, whitespace, and control characters
+ * that would cause "Invalid character in header content" errors when the key
+ * is used in the Authorization header.
+ */
 function parseKeys(apiKey: string): string[] {
+  if (!apiKey || typeof apiKey !== 'string') return [];
   return apiKey
     .split('\n')
+    .map((k) => k.trim())
+    // Strip surrounding quotes (users sometimes paste "sk-or-..." with quotes)
+    .map((k) => k.replace(/^["'`]+|["'`]+$/g, ''))
+    // Remove any control characters / non-printable chars that break HTTP headers
+    .map((k) => k.replace(/[\x00-\x1F\x7F]/g, ''))
     .map((k) => k.trim())
     .filter((k) => k.length > 0 && !k.startsWith('PASTE_') && !k.startsWith('YOUR_'));
 }
