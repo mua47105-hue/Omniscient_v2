@@ -111,7 +111,19 @@ async function main() {
     create: { key: "alert_thresholds", value: "{}" },
     update: {},
   });
-  console.log("  ✓ Default settings created");
+  // Data source API keys (placeholder — users paste real keys in Settings → Data Sources)
+  for (const ds of [
+    { key: "finnhub_api_key", val: "PASTE_YOUR_FINNHUB_API_KEY" },
+    { key: "alpha_vantage_api_key", val: "PASTE_YOUR_ALPHA_VANTAGE_API_KEY" },
+    { key: "twelvedata_api_key", val: "PASTE_YOUR_TWELVEDATA_API_KEY" },
+    { key: "tiingo_api_key", val: "PASTE_YOUR_TIINGO_API_KEY" },
+    { key: "coingecko_api_key", val: "PASTE_YOUR_COINGECKO_API_KEY" },
+    { key: "fmp_api_key", val: "PASTE_YOUR_FMP_API_KEY" },
+    { key: "news_api_key", val: "PASTE_YOUR_NEWS_API_KEY" },
+  ]) {
+    await db.setting.upsert({ where: { key: ds.key }, create: { key: ds.key, value: JSON.stringify(ds.val) }, update: {} });
+  }
+  console.log("  ✓ Default settings created (7 data source keys)");
 
   // 5. Schedule jobs
   for (const j of [

@@ -26,6 +26,8 @@ function envOverrideForKey(key: string): string | undefined {
     [SETTING_KEYS.coinGeckoApiKey]: HF_SECRETS.coinGeckoApiKey,
     [SETTING_KEYS.fmpApiKey]: HF_SECRETS.fmpApiKey,
     [SETTING_KEYS.newsApiKey]: HF_SECRETS.newsApiKey,
+    [SETTING_KEYS.twelveDataApiKey]: process.env.TWELVEDATA_API_KEY || HF_SECRETS.twelveDataApiKey,
+    [SETTING_KEYS.tiingoApiKey]: process.env.TIINGO_API_KEY || HF_SECRETS.tiingoApiKey,
   };
   return map[key];
 }
@@ -87,6 +89,8 @@ export const SETTING_KEYS = {
   coinGeckoApiKey: 'coingecko_api_key',
   fmpApiKey: 'fmp_api_key',
   newsApiKey: 'news_api_key',
+  twelveDataApiKey: 'twelvedata_api_key',
+  tiingoApiKey: 'tiingo_api_key',
   alertThresholds: 'alert_thresholds',
   defaultThreshold: 'default_threshold',
   schedulerEnabled: 'scheduler_enabled',
