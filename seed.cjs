@@ -43,6 +43,36 @@ async function main() {
     console.log("  ✓ Pollinations already exists");
   }
 
+  // 1b. Other preset providers (with placeholder keys — users just paste their key)
+  const presetProviders = [
+    { name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", apiKey: "PASTE_YOUR_OPENROUTER_API_KEY", notes: "Aggregates 100+ models. Get key: openrouter.ai/keys", models: [{ modelId: "meta-llama/llama-3.3-70b-instruct", displayName: "Llama 3.3 70B", contextWindow: 128000, freeTierRpm: 50 }] },
+    { name: "Groq", baseUrl: "https://api.groq.com/openai/v1", apiKey: "PASTE_YOUR_GROQ_API_KEY", notes: "Ultra-fast inference (500+ tok/s). Get key: console.groq.com/keys", models: [{ modelId: "llama-3.3-70b-versatile", displayName: "Llama 3.3 70B Versatile", contextWindow: 128000, freeTierRpm: 30 }] },
+    { name: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", apiKey: "PASTE_YOUR_GEMINI_API_KEY", notes: "Google Gemini. Free tier: 15 RPM. Get key: aistudio.google.com/app/apikey", models: [{ modelId: "gemini-2.0-flash", displayName: "Gemini 2.0 Flash", contextWindow: 1048576, freeTierRpm: 15 }] },
+    { name: "Mistral", baseUrl: "https://api.mistral.ai/v1", apiKey: "PASTE_YOUR_MISTRAL_API_KEY", notes: "Mistral AI. Get key: console.mistral.ai/api-keys", models: [{ modelId: "mistral-large-latest", displayName: "Mistral Large", contextWindow: 128000, freeTierRpm: 1 }] },
+    { name: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "PASTE_YOUR_NVIDIA_API_KEY", notes: "NVIDIA NIM. Get key: build.nvidia.com", models: [{ modelId: "meta/llama-3.3-70b-instruct", displayName: "Llama 3.3 70B", contextWindow: 128000, freeTierRpm: 40 }] },
+    { name: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", apiKey: "PASTE_YOUR_CEREBRAS_API_KEY", notes: "Fastest inference (2000+ tok/s). Get key: cloud.cerebras.ai", models: [{ modelId: "llama-3.3-70b", displayName: "Llama 3.3 70B", contextWindow: 128000, freeTierRpm: 20 }] },
+    { name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", apiKey: "PASTE_YOUR_DEEPSEEK_API_KEY", notes: "Very cheap ($0.27/M tokens). Get key: platform.deepseek.com/api_keys", models: [{ modelId: "deepseek-chat", displayName: "DeepSeek V3", contextWindow: 64000, freeTierRpm: 60 }] },
+    { name: "xAI Grok", baseUrl: "https://api.x.ai/v1", apiKey: "PASTE_YOUR_XAI_API_KEY", notes: "Grok. $25 free credit/month. Get key: console.x.ai", models: [{ modelId: "grok-3", displayName: "Grok 3", contextWindow: 131072, freeTierRpm: 30 }] },
+  ];
+  let presetCount = 0;
+  for (const p of presetProviders) {
+    const ex = await db.llmProvider.findUnique({ where: { name: p.name } });
+    if (!ex) {
+      await db.llmProvider.create({
+        data: {
+          name: p.name,
+          baseUrl: p.baseUrl,
+          apiKey: p.apiKey,
+          notes: p.notes,
+          isActive: false, // inactive until user pastes a real key
+          models: { create: p.models.map(m => ({ ...m, isActive: true, capabilities: '["text","json"]' })) },
+        },
+      });
+      presetCount++;
+    }
+  }
+  if (presetCount > 0) console.log("  ✓ " + presetCount + " preset providers added (paste API keys to activate)");
+
   // 2. Crypto assets
   const assets = [
     { symbol: "BTCUSDT", name: "Bitcoin", assetClass: "crypto", exchange: "binance" },
