@@ -87,7 +87,9 @@ const TOPICS: { key: Topic; label: string; icon: typeof Bitcoin }[] = [
 
 async function fetchNews(topic: Topic): Promise<NewsItem[]> {
   const r = await fetch(`/api/news?topic=${topic}`, { cache: 'no-store' });
-  const j: ApiResult<NewsItem[]> = await r.json();
+  const text = await r.text();
+  let j: ApiResult<NewsItem[]>;
+  try { j = JSON.parse(text); } catch { throw new Error('Server returned non-JSON response'); }
   if (!j.success) throw new Error(j.error || 'Failed to load news');
   return j.data ?? [];
 }
@@ -101,7 +103,9 @@ async function analyzeNews(
     body: JSON.stringify({ articles }),
     cache: 'no-store',
   });
-  const j: ApiResult<AnalyzeResponse> = await r.json();
+  const text = await r.text();
+  let j: ApiResult<AnalyzeResponse>;
+  try { j = JSON.parse(text); } catch { j = { success: false, error: 'Server returned non-JSON response' }; }
   if (!j.success) throw new Error(j.error || 'Analysis request failed');
   return j.data as AnalyzeResponse;
 }

@@ -68,7 +68,9 @@ type FeedFilter = 'all' | 'ipo' | 'ico';
 // ---------------------------------------------------------------------------
 async function fetchIpoIco(type: TabKey): Promise<IpoIcoPayload> {
   const r = await fetch(`/api/ipo-ico?type=${type}`, { cache: 'no-store' });
-  const j: ApiResult<IpoIcoPayload> = await r.json();
+  const text = await r.text();
+  let j: ApiResult<IpoIcoPayload>;
+  try { j = JSON.parse(text); } catch { throw new Error('Server returned non-JSON response'); }
   if (!j.success) throw new Error(j.error || 'Failed to load IPO/ICO feed');
   return j.data ?? { ipos: [], icos: [] };
 }

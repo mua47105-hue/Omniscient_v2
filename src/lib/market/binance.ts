@@ -190,6 +190,7 @@ export async function getAllTickers(): Promise<Ticker[]> {
     }
     if (tickers.length === 0) throw new Error('Binance all-tickers + per-symbol fallback both failed');
     setCached(cacheKey, tickers, 30_000);
+    _lastDataSource = 'binance';
     return tickers;
   }
 }

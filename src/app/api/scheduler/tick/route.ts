@@ -114,7 +114,7 @@ async function analyzeAsset(
   // On-chain hashrate trend (BTC miner confidence) is a free fundamental layer.
   const onchainTrend = getOnchainTrend();
   const deterministic = computeConsensus(
-    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, onchainTrend },
+    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, onchainTrend, klines },
     undefined,
   );
 
@@ -208,11 +208,12 @@ async function analyzeAsset(
         tokensUsed = (result.usage?.promptTokens ?? 0) + (result.usage?.completionTokens ?? 0) || maxTokens;
         recordLlmCall(tokensUsed);
         recordLlmSuccess(); // clear the consecutive-failure counter
-      } catch {
+      } catch (llmErr: any) {
         // Tiered: LLM failure falls back to the deterministic consensus. The
         // signal is still saved — just without the LLM layer this tick. The
         // global cooldown is tripped so sibling assets in this scan skip the
         // LLM instead of all hitting the rate limit together.
+        console.error(`[brain] LLM call failed for ${asset.symbol}:`, llmErr?.message);
         recordLlmFailure();
         action = 'skip';
         reason = 'llm-failed-fallback';
@@ -226,7 +227,7 @@ async function analyzeAsset(
 
   // 2) Final consensus — with whatever LLM input we have (or none).
   const consensus = computeConsensus(
-    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, llmAnalysis, onchainTrend },
+    { asset: asset.symbol, timeframe: '4h', price: ticker.price, technical: indicators, orderbook, fundingRate: funding?.rate, llmAnalysis, onchainTrend, klines },
     llmLayer,
   );
 
@@ -369,20 +370,20 @@ export async function POST(req: NextRequest) {
     let gradingSummary: { graded: number; skipped: number } | null = null;
     try {
       gradingSummary = await gradeExpiredSignals();
-    } catch { /* best-effort — never block the tick */ }
+    } catch (e: any) { console.error("[tick] grading failed:", e.message); }
 
     // Price-alert threshold check — safety path, always runs.
     let priceAlertSummary: { checked: number; triggered: number } | null = null;
     try {
       priceAlertSummary = await checkPriceAlerts();
-    } catch { /* best-effort */ }
+    } catch (e: any) { console.error("[tick] subsystem failed:", e.message); }
 
     // Manual override: deep-analyze any force-run'd symbols every tick, even
     // when the autonomous brain is paused. This is the manual control path.
     let forcedSummary: any[] = [];
     try {
       forcedSummary = await runForcedAnalysis(sendAlerts);
-    } catch { /* best-effort */ }
+    } catch (e: any) { console.error("[tick] subsystem failed:", e.message); }
 
     // News-event triggers — run on EVERY tick (60s) for sub-minute breaking-news
     // response. The 5-min RSS cache (in news-triggers) keeps this free-tier-safe.
@@ -396,7 +397,7 @@ export async function POST(req: NextRequest) {
           newsTriggerSummary = { triggered: 1, queued: nt.queuedAssets.length, headlines: nt.matchedHeadlines.length };
         }
       }
-    } catch { /* best-effort — news never blocks the tick */ }
+    } catch (e: any) { console.error("[tick] news triggers failed:", e.message); }
 
     const jobs = await db.scheduleJob.findMany({ where: { enabled: true } });
     const due = jobs.filter((j) => forceModule ? j.moduleKey === forceModule : isDue(j));
@@ -440,7 +441,7 @@ export async function POST(req: NextRequest) {
           triggerSummary = { triggered: triggers.length, queued: triggers.reduce((s, t) => s + t.queued.length, 0), details: triggers };
         }
       }
-    } catch { /* best-effort */ }
+    } catch (e: any) { console.error("[tick] subsystem failed:", e.message); }
 
     // (News-event triggers already ran above, on every tick, for sub-minute
     // breaking-news response. No duplicate call here.)
@@ -450,7 +451,7 @@ export async function POST(req: NextRequest) {
     let tuneSummary: any = null;
     try {
       tuneSummary = await selfTune();
-    } catch { /* best-effort — tuning never blocks the tick */ }
+    } catch (e: any) { console.error("[tick] self-tune failed:", e.message); }
 
     // Best-effort Supabase sync.
     let syncSummary: { totalSynced: number; totalErrors: number } | null = null;
@@ -467,6 +468,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json<ApiResult<{ ran: typeof ran; skipped: false; grading: typeof gradingSummary; priceAlerts: typeof priceAlertSummary; sync: typeof syncSummary; forced: typeof forcedSummary; triggers: typeof triggerSummary; newsTriggers: typeof newsTriggerSummary; tune: typeof tuneSummary }>>({ success: true, data: { ran, skipped: false, grading: gradingSummary, priceAlerts: priceAlertSummary, sync: syncSummary, forced: forcedSummary, triggers: triggerSummary, newsTriggers: newsTriggerSummary, tune: tuneSummary } });
   } catch (e: any) {
+    console.error('[tick] Tick failed:', e.message);
+    tickEnded();
     return NextResponse.json<ApiResult<never>>({ success: false, error: e.message }, { status: 500 });
   } finally {
     // Always clear the tick mutex so the next tick can run
