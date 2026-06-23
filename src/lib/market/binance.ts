@@ -1,14 +1,29 @@
 // Binance market data client — REST + WebSocket (deepest free crypto data source)
 // Public endpoints, no API key required for market data.
+//
+// IMPORTANT — geo-block resilience:
+// Hugging Face Spaces (and most cloud datacenters) get HTTP 451/418 from
+// api.binance.com because Binance blocks datacenter IP ranges. To survive
+// this, every public reader here follows a 3-tier fallback chain:
+//   1. Binance primary (api.binance.com) — fastest, but geo-blocked on HF
+//   2. Binance public mirror (data-api.binance.vision) — NOT geo-blocked, same API
+//   3. CoinGecko /coins/markets — cross-source fallback (works from datacenter IPs)
 
 import type { Kline, OrderBook, Ticker } from '@/lib/types';
 
-const REST_BASE = 'https://api.binance.com';
 const WS_BASE = 'wss://stream.binance.com:9443/ws';
 
+// Binance public REST hosts tried in order. `api.binance.com` is geo-blocked
+// (HTTP 451) on cloud datacenters (Hugging Face Spaces, Vercel, etc.); the
+// public mirror `data-api.binance.vision` is NOT geo-blocked and serves the
+// identical REST API. We fall through the list on any non-2xx / network error.
+const BINANCE_HOSTS = [
+  'https://api.binance.com',
+  'https://data-api.binance.vision',
+  'https://api-gcp.binance.com',
+];
+
 // In-memory cache to reduce API calls + survive intermittent rate-limits.
-// Binance blocks batch endpoints (418) from datacenter IPs intermittently,
-// so we cache aggressively and fall back to per-symbol requests.
 type CacheEntry<T> = { value: T; expiresAt: number };
 const cache = new Map<string, CacheEntry<unknown>>();
 
@@ -27,15 +42,42 @@ function setCached<T>(key: string, value: T, ttlMs: number): void {
 }
 
 async function fetchJsonUncached<T>(url: string): Promise<T> {
-  const res = await fetch(url, {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  });
-  if (!res.ok) throw new Error(`Binance ${res.status}: ${await res.text()}`);
-  return (await res.json()) as T;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Binance ${res.status}: ${await res.text().catch(() => '')}`.slice(0, 200));
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-/** Fetch with one quick retry (200ms) — keeps total latency low while still surviving transient blips. */
+/**
+ * Fetch a Binance REST path, trying every host in BINANCE_HOSTS in order.
+ * `api.binance.com` geo-blocks datacenter IPs (451/418), so we transparently
+ * retry on `data-api.binance.vision` (the official public data mirror) which
+ * is NOT geo-blocked and serves the identical API.
+ */
+async function binanceFetchJson<T>(path: string): Promise<T> {
+  let lastErr: unknown;
+  for (const host of BINANCE_HOSTS) {
+    try {
+      return await fetchJsonUncached<T>(`${host}${path}`);
+    } catch (e) {
+      lastErr = e;
+      // 418/451/403 = geo-blocked → try next host. Any other error → also try next.
+      continue;
+    }
+  }
+  throw lastErr;
+}
+
+/** Fetch with one quick retry (200ms) — for endpoints that don't use the multi-host chain. */
 async function fetchJson<T>(url: string, retries = 2): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < retries; i++) {
@@ -43,8 +85,8 @@ async function fetchJson<T>(url: string, retries = 2): Promise<T> {
       return await fetchJsonUncached<T>(url);
     } catch (e) {
       lastErr = e;
-      // 418 = blocked — retrying the SAME batch url won't help, bail fast so caller can fall back.
       if (e instanceof Error && e.message.includes('Binance 418')) throw e;
+      if (e instanceof Error && e.message.includes('Binance 451')) throw e;
       await new Promise((r) => setTimeout(r, 200 * (i + 1)));
     }
   }
@@ -57,7 +99,7 @@ export async function getTicker24h(symbol: string): Promise<Ticker> {
   const cacheKey = `t24:${sym}`;
   const cached = getCached<Ticker>(cacheKey);
   if (cached) return cached;
-  const d = await fetchJson<any>(`${REST_BASE}/api/v3/ticker/24hr?symbol=${sym}`);
+  const d = await binanceFetchJson<any>(`/api/v3/ticker/24hr?symbol=${sym}`);
   const t: Ticker = {
     symbol: sym,
     price: parseFloat(d.lastPrice),
@@ -83,7 +125,7 @@ export async function getTickers24h(symbols: string[]): Promise<Ticker[]> {
   // Try batch endpoint first (1 attempt — fail fast on 418).
   try {
     const symParam = encodeURIComponent(JSON.stringify(upper));
-    const data = await fetchJson<any[]>(`${REST_BASE}/api/v3/ticker/24hr?symbols=${symParam}`);
+    const data = await binanceFetchJson<any[]>(`/api/v3/ticker/24hr?symbols=${symParam}`);
     const tickers = data.map((d) => ({
       symbol: d.symbol,
       price: parseFloat(d.lastPrice),
@@ -117,7 +159,7 @@ export async function getAllTickers(): Promise<Ticker[]> {
   if (cached) return cached;
 
   try {
-    const data = await fetchJson<any[]>(`${REST_BASE}/api/v3/ticker/24hr`);
+    const data = await binanceFetchJson<any[]>(`/api/v3/ticker/24hr`);
     const tickers = data
       .filter((d) => d.symbol.endsWith('USDT') && !d.symbol.includes('UP') && !d.symbol.includes('DOWN'))
       .map((d) => ({
@@ -161,8 +203,8 @@ export async function getKlines(
   const cacheKey = `kl:${symbol.toUpperCase()}:${interval}:${limit}`;
   const cached = getCached<Kline[]>(cacheKey);
   if (cached) return cached;
-  const data = await fetchJson<any[]>(
-    `${REST_BASE}/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${limit}`
+  const data = await binanceFetchJson<any[]>(
+    `/api/v3/klines?symbol=${symbol.toUpperCase()}&interval=${interval}&limit=${limit}`
   );
   const klines: Kline[] = data.map((k) => ({
     openTime: k[0],
@@ -182,8 +224,8 @@ export async function getOrderBook(symbol: string, limit: number = 50): Promise<
   const cacheKey = `ob:${symbol.toUpperCase()}:${limit}`;
   const cached = getCached<OrderBook>(cacheKey);
   if (cached) return cached;
-  const data = await fetchJson<any>(
-    `${REST_BASE}/api/v3/depth?symbol=${symbol.toUpperCase()}&limit=${limit}`
+  const data = await binanceFetchJson<any>(
+    `/api/v3/depth?symbol=${symbol.toUpperCase()}&limit=${limit}`
   );
   const bids: [number, number][] = data.bids.map((b: string[]) => [parseFloat(b[0]), parseFloat(b[1])]);
   const asks: [number, number][] = data.asks.map((a: string[]) => [parseFloat(a[0]), parseFloat(a[1])]);
@@ -413,8 +455,8 @@ export async function getTakerBuySellVolume(
 
 /** Recent trades */
 export async function getRecentTrades(symbol: string, limit: number = 50) {
-  const data = await fetchJson<any[]>(
-    `${REST_BASE}/api/v3/trades?symbol=${symbol.toUpperCase()}&limit=${limit}`
+  const data = await binanceFetchJson<any[]>(
+    `/api/v3/trades?symbol=${symbol.toUpperCase()}&limit=${limit}`
   );
   return data.map((t) => ({
     id: t.id,
