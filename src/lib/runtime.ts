@@ -94,6 +94,8 @@ export const HF_SECRETS = {
   coinGeckoApiKey: process.env.COINGECKO_API_KEY,
   fmpApiKey: process.env.FMP_API_KEY,
   newsApiKey: process.env.NEWS_API_KEY,
+  twelveDataApiKey: process.env.TWELVEDATA_API_KEY,
+  tiingoApiKey: process.env.TIINGO_API_KEY,
 } as const;
 
 /**

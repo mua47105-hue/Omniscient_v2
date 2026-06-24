@@ -30,13 +30,18 @@ export interface IpoIcoItem {
 // Web search — fetches raw results
 // ---------------------------------------------------------------------------
 async function webSearch(query: string, num: number): Promise<any[]> {
-  const zai = await ZAI.create();
-  const results = await zai.functions.invoke('web_search', {
-    query,
-    num,
-    recency_days: 7,
-  });
-  return results as any[];
+  try {
+    const zai = await ZAI.create();
+    const results = await zai.functions.invoke('web_search', {
+      query,
+      num,
+      recency_days: 7,
+    });
+    return results as any[];
+  } catch (e: any) {
+    console.error('[ipo-ico] webSearch failed:', e.message);
+    return []; // return empty instead of crashing the whole endpoint
+  }
 }
 
 // ---------------------------------------------------------------------------

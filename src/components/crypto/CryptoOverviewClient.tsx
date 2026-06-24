@@ -212,7 +212,7 @@ export function CryptoOverviewClient() {
               {pricesQ.isLoading && tickers.length === 0 ? (
                 <TableSkeleton />
               ) : pricesQ.isError && tickers.length === 0 ? (
-                <ErrorState message="Failed to load market data" />
+                <ErrorState message="Failed to load market data" detail={pricesQ.error?.message} />
               ) : (
                 <AssetTable rows={toRows(tickers)} />
               )}
@@ -278,7 +278,7 @@ function TableSkeleton() {
   );
 }
 
-function ErrorState({ message }: { message: string }) {
+function ErrorState({ message, detail }: { message: string; detail?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-12">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10 ring-1 ring-inset ring-rose-500/20">
@@ -286,10 +286,8 @@ function ErrorState({ message }: { message: string }) {
       </div>
       <div className="text-center space-y-1">
         <p className="text-sm font-medium text-rose-500">{message}</p>
-        <p className="text-xs text-muted-foreground max-w-sm">
-          All upstream market data sources are unreachable. This usually means the deploy environment is
-          geo-blocked by Binance and CoinGecko is rate-limiting shared IPs. Will retry automatically.
-        </p>
+        {detail && <p className="text-xs text-muted-foreground font-mono">{detail.slice(0, 150)}</p>}
+        <p className="text-xs text-muted-foreground">Will retry automatically</p>
       </div>
     </div>
   );

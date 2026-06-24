@@ -16,6 +16,8 @@ import {
   Coins,
   Landmark,
   BarChart3,
+  LineChart,
+  Activity,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -57,6 +59,24 @@ const SOURCES: DataSourceDef[] = [
     icon: Landmark,
     accent: 'text-teal-500',
     purpose: 'Forex · Macro',
+  },
+  {
+    key: 'twelvedata_api_key',
+    name: 'Twelve Data',
+    description: 'Stocks, forex, crypto, ETFs, indices. Free 800 calls/day, 8/min. Best coverage for the multi-source fallback.',
+    link: 'https://twelvedata.com/pricing',
+    icon: LineChart,
+    accent: 'text-sky-500',
+    purpose: 'Stocks · Forex · Crypto',
+  },
+  {
+    key: 'tiingo_api_key',
+    name: 'Tiingo',
+    description: 'Daily stock prices, fundamentals, news. Free 1000 calls/day. Great for building local databases.',
+    link: 'https://api.tiingo.com/pricing',
+    icon: Activity,
+    accent: 'text-violet-500',
+    purpose: 'Stocks · Fundamentals',
   },
   {
     key: 'coingecko_api_key',

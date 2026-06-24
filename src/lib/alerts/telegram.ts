@@ -39,7 +39,8 @@ function formatSignal(signal: ConsensusResult): string {
   lines.push(`*Models:* ${signal.modelsUsed.join(', ')}`);
   lines.push('');
   lines.push(`*Rationale:*`);
-  lines.push(signal.rationale.slice(0, 800));
+  // Escape rationale for MarkdownV2 — it contains | _ . % [ ] etc. that break Telegram parsing
+  lines.push(escapeMd(signal.rationale.slice(0, 800)));
   return lines.join('\n');
 }
 

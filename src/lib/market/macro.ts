@@ -335,17 +335,21 @@ async function getBinanceDailyKlines(symbol: string, limit = 200): Promise<Kline
 }
 
 /**
- * Get a quote WITH Binance fallback for gold/BTC/ETH.
- * Tries Yahoo first; if it fails AND the symbol has a Binance fallback, uses Binance klines.
+ * Get a quote WITH multi-source fallback.
+ * Tries Yahoo first; if it fails, falls back to Twelve Data → Alpha Vantage →
+ * Tiingo → Finnhub → Binance (for gold/BTC/ETH only).
  * Returns a MacroQuote with klines populated for technical analysis.
  */
 export async function getQuoteWithFallback(yahooSymbol: string, range = '1y'): Promise<MacroQuote> {
+  // Try the new multi-source fallback chain first (Yahoo → Twelve Data → Alpha Vantage → Tiingo → Finnhub)
   try {
-    return await getYahooQuoteBySymbol(yahooSymbol, range);
-  } catch (yahooErr: any) {
+    const { getQuoteMultiSource } = await import('@/lib/market/multi-source');
+    return await getQuoteMultiSource(yahooSymbol, range);
+  } catch (multiSourceErr: any) {
+    // All API-key sources failed — try Binance as a last resort (only works for gold/BTC/ETH)
     const fallback = BINANCE_FALLBACKS[yahooSymbol];
-    if (!fallback) throw yahooErr; // no fallback available, re-throw Yahoo error
-    console.log(`[macro] ${yahooSymbol} Yahoo failed (${yahooErr.message}), using Binance fallback ${fallback.binanceSymbol}`);
+    if (!fallback) throw multiSourceErr; // no Binance fallback, re-throw the multi-source error
+    console.log(`[macro] ${yahooSymbol} all sources failed, using Binance fallback ${fallback.binanceSymbol}`);
     const klines = await getBinanceDailyKlines(fallback.binanceSymbol, 200);
     const lastClose = klines[klines.length - 1]?.close ?? 0;
     const prevClose = klines[klines.length - 2]?.close ?? lastClose;
@@ -403,16 +407,20 @@ async function getForexRateFromErApi(base: string, quote: string): Promise<{ rat
 }
 
 /**
- * Get a forex quote with open.er-api.com fallback.
- * Tries Yahoo first (gives klines for charting); if Yahoo fails, uses er-api for at least the current price.
+ * Get a forex quote with multi-source fallback.
+ * Tries Yahoo first; if it fails, uses the multi-source chain (Twelve Data, etc.),
+ * then er-api as a last resort (current price only, no klines).
  */
 export async function getForexQuoteWithFallback(yahooSymbol: string, range = '1y'): Promise<MacroQuote> {
+  // Try the multi-source chain first (Yahoo → Twelve Data → Finnhub for forex)
   try {
-    return await getYahooQuoteBySymbol(yahooSymbol, range);
-  } catch (yahooErr: any) {
+    const { getQuoteMultiSource } = await import('@/lib/market/multi-source');
+    return await getQuoteMultiSource(yahooSymbol, range);
+  } catch (multiSourceErr: any) {
+    // All API-key sources failed — try er-api as a last resort (free, no key)
     const pair = FOREX_YAHOO_TO_PAIR[yahooSymbol];
-    if (!pair) throw yahooErr; // not a forex pair, re-throw
-    console.log(`[macro] ${yahooSymbol} Yahoo failed (${yahooErr.message}), using er-api fallback`);
+    if (!pair) throw multiSourceErr; // not a forex pair, re-throw
+    console.log(`[macro] ${yahooSymbol} all sources failed, using er-api fallback`);
     const { rate } = await getForexRateFromErApi(pair.base, pair.quote);
     return {
       symbol: yahooSymbol,
@@ -476,15 +484,18 @@ async function getAlphaVantageQuote(avSymbol: string): Promise<{ price: number; 
 
 /**
  * Get a stock/index quote with Alpha Vantage fallback.
- * Tries Yahoo first (gives klines for charting); if Yahoo fails, uses Alpha Vantage for current price.
+ * Tries Yahoo first; if it fails, uses the multi-source chain (Twelve Data, Alpha Vantage, etc.).
  */
 export async function getStockQuoteWithFallback(yahooSymbol: string, range = '1y'): Promise<MacroQuote> {
+  // Try the multi-source chain first (Yahoo → Twelve Data → Alpha Vantage → Tiingo → Finnhub)
   try {
-    return await getYahooQuoteBySymbol(yahooSymbol, range);
-  } catch (yahooErr: any) {
+    const { getQuoteMultiSource } = await import('@/lib/market/multi-source');
+    return await getQuoteMultiSource(yahooSymbol, range);
+  } catch (multiSourceErr: any) {
+    // All multi-source providers failed — try the old Alpha Vantage fallback as a last resort
     const fb = ALPHAVANTAGE_FALLBACKS[yahooSymbol];
-    if (!fb) throw yahooErr; // no fallback available
-    console.log(`[macro] ${yahooSymbol} Yahoo failed (${yahooErr.message}), trying Alpha Vantage fallback`);
+    if (!fb) throw multiSourceErr;
+    console.log(`[macro] ${yahooSymbol} all multi-source failed, trying legacy Alpha Vantage fallback`);
     try {
       const av = await getAlphaVantageQuote(fb.avSymbol);
       return {
@@ -498,11 +509,11 @@ export async function getStockQuoteWithFallback(yahooSymbol: string, range = '1y
         yearHigh: 0,
         yearLow: 0,
         currency: 'USD',
-        klines: [], // Alpha Vantage free tier doesn't give daily klines efficiently
+        klines: [],
       };
     } catch (avErr: any) {
       console.error(`[macro] ${yahooSymbol} Alpha Vantage also failed:`, avErr.message);
-      throw yahooErr; // throw the original Yahoo error
+      throw multiSourceErr;
     }
   }
 }

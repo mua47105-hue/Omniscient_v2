@@ -84,6 +84,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'System',
     items: [
+      { href: '/llm-activity', label: 'LLM Activity', icon: Activity },
       { href: '/notifications', label: 'Notifications', icon: Bell },
       { href: '/reports', label: 'Reports', icon: FileText },
       { href: '/settings', label: 'Settings', icon: Settings },
