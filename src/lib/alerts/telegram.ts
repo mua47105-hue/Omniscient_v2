@@ -47,11 +47,32 @@ function formatSignal(signal: ConsensusResult): string {
 export async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML' = 'MarkdownV2') {
   const { token, chatId } = await getTelegramConfig();
   if (!token || !chatId) throw new Error('Telegram bot token or chat id not configured');
-  const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode }),
-  });
+  // Sanitize token — strip quotes, whitespace, and non-ASCII chars that cause "fetch failed"
+  const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+  const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+  if (!safeToken) throw new Error('Telegram bot token is empty after sanitization');
+  if (!safeChatId) throw new Error('Telegram chat ID is empty after sanitization');
+
+  let res: Response;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    res = await fetch(`https://api.telegram.org/bot${safeToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: safeChatId, text, parse_mode: parseMode }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch (fetchErr: any) {
+    // "fetch failed" = network-level failure (DNS, connection refused, timeout, geo-block)
+    // Provide a clear, actionable error instead of the raw Node.js TypeError
+    if (fetchErr.name === 'AbortError') {
+      throw new Error('Telegram API request timed out (15s). api.telegram.org may be blocked from this server.');
+    }
+    throw new Error(`Cannot reach api.telegram.org — network error: ${fetchErr.message || fetchErr.cause?.message || 'unknown'}. The server may be geo-blocked or api.telegram.org may be unreachable.`);
+  }
+
   if (!res.ok) {
     const errBody = await res.text();
     // Provide actionable error messages for common Telegram failures
@@ -107,13 +128,28 @@ export async function sendTestMessage(): Promise<boolean> {
   } catch (e: any) {
     // If it's a formatting error, retry without parse_mode by sending raw
     if (e.message.includes("can't parse") || e.message.includes('parse')) {
+      // Reuse sendTelegramMessage with no parse mode by calling the API directly
+      // but wrapped in the same error handling
       const { token, chatId } = await getTelegramConfig();
-      if (!token || !chatId) throw new Error('Telegram bot token or chat id not configured');
-      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text }),
-      });
+      const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+      const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+      let res: Response;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        res = await fetch(`https://api.telegram.org/bot${safeToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: safeChatId, text }),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+      } catch (fetchErr: any) {
+        if (fetchErr.name === 'AbortError') {
+          throw new Error('Telegram API request timed out (15s). api.telegram.org may be blocked from this server.');
+        }
+        throw new Error(`Cannot reach api.telegram.org — network error: ${fetchErr.message || fetchErr.cause?.message || 'unknown'}.`);
+      }
       if (!res.ok) {
         const errBody = await res.text();
         let hint = '';
