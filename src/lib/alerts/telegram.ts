@@ -26,11 +26,23 @@ function escapeMd(text: string): string {
 /**
  * Make an HTTPS POST request using node:https (bypasses Next.js fetch patching
  * that causes "fetch failed" on Hugging Face Spaces).
+ *
+ * On HF Spaces, api.telegram.org may be slow or partially blocked. We use:
+ * - 30s timeout (was 15s — too short for slow connections)
+ * - Force IPv4 (HF Spaces may not route IPv6 outbound correctly)
+ * - Custom agent with keepAlive disabled
  */
-function telegramPost(url: string, body: any, timeoutMs = 15_000): Promise<{ status: number; text: string }> {
+function telegramPost(url: string, body: any, timeoutMs = 30_000): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const bodyStr = JSON.stringify(body);
+
+    // Force IPv4 — HF Spaces container may not route IPv6 outbound
+    const agent = new https.Agent({
+      keepAlive: false,
+      family: 4, // IPv4 only
+    });
+
     const req = https.request(
       {
         hostname: urlObj.hostname,
@@ -42,6 +54,7 @@ function telegramPost(url: string, body: any, timeoutMs = 15_000): Promise<{ sta
           'Content-Length': Buffer.byteLength(bodyStr),
         },
         timeout: timeoutMs,
+        agent,
       },
       (res) => {
         let data = '';
@@ -50,13 +63,12 @@ function telegramPost(url: string, body: any, timeoutMs = 15_000): Promise<{ sta
       }
     );
     req.on('error', (e) => {
-      // Distinguish timeout from other network errors
       if (e.message === 'timeout' || e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET') {
         reject(new Error('timeout'));
       } else if (e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN') {
-        reject(new Error('DNS resolution failed for api.telegram.org — the server cannot resolve the hostname'));
+        reject(new Error('DNS resolution failed for api.telegram.org'));
       } else if (e.code === 'ECONNREFUSED') {
-        reject(new Error('Connection refused by api.telegram.org — the service may be blocked from this IP'));
+        reject(new Error('Connection refused by api.telegram.org'));
       } else {
         reject(new Error(`network error: ${e.message} (code: ${e.code || 'unknown'})`));
       }
@@ -65,6 +77,24 @@ function telegramPost(url: string, body: any, timeoutMs = 15_000): Promise<{ sta
     req.write(bodyStr);
     req.end();
   });
+}
+
+/**
+ * Try to send a Telegram message with retry. If the first attempt times out
+ * (which happens on HF Spaces where api.telegram.org may be slow), retry once
+ * before giving up.
+ */
+async function telegramPostWithRetry(url: string, body: any): Promise<{ status: number; text: string }> {
+  try {
+    return await telegramPost(url, body, 30_000);
+  } catch (e: any) {
+    if (e.message === 'timeout') {
+      console.log('[telegram] First attempt timed out, retrying...');
+      // Second attempt with a shorter timeout — if it still fails, the server is truly blocked
+      return await telegramPost(url, body, 15_000);
+    }
+    throw e;
+  }
 }
 
 function formatSignal(signal: ConsensusResult): string {
@@ -104,15 +134,15 @@ export async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' 
 
   let result: { status: number; text: string };
   try {
-    result = await telegramPost(
+    result = await telegramPostWithRetry(
       `https://api.telegram.org/bot${safeToken}/sendMessage`,
       { chat_id: safeChatId, text, parse_mode: parseMode }
     );
   } catch (err: any) {
     if (err.message === 'timeout') {
-      throw new Error('Telegram API request timed out (15s). api.telegram.org may be blocked from this server.');
+      throw new Error('Telegram API timed out after retry. api.telegram.org is blocked from this server. Consider deploying on Vercel/Railway where Telegram is reachable, or use a Telegram API proxy.');
     }
-    throw new Error(`Cannot reach api.telegram.org — ${err.message || 'network error'}.`);
+    throw new Error(`Cannot reach api.telegram.org — ${err.message}.`);
   }
 
   if (result.status < 200 || result.status >= 300) {
@@ -172,7 +202,7 @@ export async function sendTestMessage(): Promise<boolean> {
       const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
       const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
       try {
-        const result = await telegramPost(
+        const result = await telegramPostWithRetry(
           `https://api.telegram.org/bot${safeToken}/sendMessage`,
           { chat_id: safeChatId, text }
         );
