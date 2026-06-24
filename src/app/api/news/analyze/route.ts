@@ -197,6 +197,7 @@ export async function POST(req: NextRequest) {
 
     const parsed = extractJsonArray(result.content);
     if (!parsed || parsed.length === 0) {
+      console.error('[news/analyze] LLM returned unparseable content. First 200 chars:', result.content?.slice(0, 200));
       const resp: NotAnalyzedResponse = {
         analyzed: false,
         message: 'LLM returned no parseable JSON array. Try again or try a different model.',

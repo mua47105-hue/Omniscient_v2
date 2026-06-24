@@ -134,31 +134,60 @@ export function extractJsonArray<T = unknown>(content: string): T[] | null {
 
   const cleaned = stripFencesAndPreamble(content);
 
+  // Fast path: clean JSON
   try {
     const v = JSON.parse(cleaned);
     if (Array.isArray(v)) return v as T[];
+    // If the LLM returned a single JSON object instead of an array, wrap it.
+    // This is common with Pollinations — it returns {sentiment:...} instead of [{sentiment:...}]
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) return [v] as T[];
   } catch {
     /* fall through */
   }
 
+  // Slow path: find the first balanced JSON block
   const block = findFirstJsonBlock(cleaned);
-  if (!block || !block.startsWith('[')) return null;
+  if (!block) return null;
 
-  try {
-    const v = JSON.parse(block);
-    if (Array.isArray(v)) return v as T[];
-  } catch {
+  // Try parsing as array first
+  if (block.startsWith('[')) {
     try {
-      const fixed = block
-        .replace(/,\s*([}\]])/g, '$1')
-        .replace(/[\u201c\u201d]/g, '"')
-        .replace(/[\u2018\u2019]/g, "'");
-      const v = JSON.parse(fixed);
+      const v = JSON.parse(block);
       if (Array.isArray(v)) return v as T[];
     } catch {
-      /* give up */
+      try {
+        const fixed = block
+          .replace(/,\s*([}\]])/g, '$1')
+          .replace(/[\u201c\u201d]/g, '"')
+          .replace(/[\u2018\u2019]/g, "'");
+        const v = JSON.parse(fixed);
+        if (Array.isArray(v)) return v as T[];
+      } catch {
+        /* give up on array */
+      }
     }
   }
+
+  // If the block is a JSON object, wrap it in an array (LLMs often return a
+  // single object when asked for an array, especially with 1 article input)
+  if (block.startsWith('{')) {
+    try {
+      const v = JSON.parse(block);
+      if (v !== null && typeof v === 'object' && !Array.isArray(v)) return [v] as T[];
+    } catch {
+      try {
+        const fixed = block
+          .replace(/,\s*([}\]])/g, '$1')
+          .replace(/[\u201c\u201d]/g, '"')
+          .replace(/[\u2018\u2019]/g, "'");
+        const v = JSON.parse(fixed);
+        if (v !== null && typeof v === 'object' && !Array.isArray(v)) return [v] as T[];
+      } catch {
+        /* give up */
+      }
+    }
+  }
+
   return null;
 }
 
