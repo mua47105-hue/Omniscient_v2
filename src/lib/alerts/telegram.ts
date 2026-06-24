@@ -1,6 +1,11 @@
 // Telegram Bot alert dispatcher — sends trade-signal alerts.
 // Requires a bot token (from @BotFather) + chat id.
+//
+// IMPORTANT: Uses node:https instead of fetch() to bypass Next.js fetch
+// patching, which causes "fetch failed" on Hugging Face Spaces (the patched
+// fetch can't reach api.telegram.org from datacenter IPs).
 
+import https from 'node:https';
 import { db } from '@/lib/db';
 import { getSetting } from '@/lib/config/settings';
 import type { ConsensusResult } from '@/lib/types';
@@ -16,6 +21,39 @@ async function getTelegramConfig() {
 
 function escapeMd(text: string): string {
   return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+}
+
+/**
+ * Make an HTTPS POST request using node:https (bypasses Next.js fetch patching
+ * that causes "fetch failed" on Hugging Face Spaces).
+ */
+function telegramPost(url: string, body: any, timeoutMs = 15_000): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const bodyStr = JSON.stringify(body);
+    const req = https.request(
+      {
+        hostname: urlObj.hostname,
+        port: 443,
+        path: urlObj.pathname + urlObj.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(bodyStr),
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }));
+      }
+    );
+    req.on('error', (e) => reject(e));
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.write(bodyStr);
+    req.end();
+  });
 }
 
 function formatSignal(signal: ConsensusResult): string {
@@ -47,52 +85,44 @@ function formatSignal(signal: ConsensusResult): string {
 export async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML' = 'MarkdownV2') {
   const { token, chatId } = await getTelegramConfig();
   if (!token || !chatId) throw new Error('Telegram bot token or chat id not configured');
-  // Sanitize token — strip quotes, whitespace, and non-ASCII chars that cause "fetch failed"
+  // Sanitize token — strip quotes, whitespace, and non-ASCII chars
   const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
   const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
   if (!safeToken) throw new Error('Telegram bot token is empty after sanitization');
   if (!safeChatId) throw new Error('Telegram chat ID is empty after sanitization');
 
-  let res: Response;
+  let result: { status: number; text: string };
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
-    res = await fetch(`https://api.telegram.org/bot${safeToken}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: safeChatId, text, parse_mode: parseMode }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-  } catch (fetchErr: any) {
-    // "fetch failed" = network-level failure (DNS, connection refused, timeout, geo-block)
-    // Provide a clear, actionable error instead of the raw Node.js TypeError
-    if (fetchErr.name === 'AbortError') {
+    result = await telegramPost(
+      `https://api.telegram.org/bot${safeToken}/sendMessage`,
+      { chat_id: safeChatId, text, parse_mode: parseMode }
+    );
+  } catch (err: any) {
+    if (err.message === 'timeout') {
       throw new Error('Telegram API request timed out (15s). api.telegram.org may be blocked from this server.');
     }
-    throw new Error(`Cannot reach api.telegram.org — network error: ${fetchErr.message || fetchErr.cause?.message || 'unknown'}. The server may be geo-blocked or api.telegram.org may be unreachable.`);
+    throw new Error(`Cannot reach api.telegram.org — ${err.message || 'network error'}.`);
   }
 
-  if (!res.ok) {
-    const errBody = await res.text();
-    // Provide actionable error messages for common Telegram failures
+  if (result.status < 200 || result.status >= 300) {
+    const errBody = result.text;
     let hint = '';
-    if (res.status === 401) {
+    if (result.status === 401) {
       hint = ' — bot token is invalid or revoked. Get a fresh token from @BotFather.';
-    } else if (res.status === 404) {
-      hint = ' — bot token not found. Check for extra quotes/spaces in the token, or create a new bot via @BotFather.';
-    } else if (res.status === 400 && errBody.includes('chat not found')) {
-      hint = ' — the bot cannot find this chat. Open Telegram, search for your bot, and send /start to it first. (Bots can only message users who have started a conversation with them.)';
-    } else if (res.status === 400 && errBody.includes('chat_id is empty')) {
+    } else if (result.status === 404) {
+      hint = ' — bot token not found. Check for extra quotes/spaces, or create a new bot via @BotFather.';
+    } else if (result.status === 400 && errBody.includes('chat not found')) {
+      hint = ' — Open Telegram, search for your bot, and send /start to it first.';
+    } else if (result.status === 400 && errBody.includes('chat_id is empty')) {
       hint = ' — chat ID is empty. Get your chat ID from @userinfobot or @RawDataBot.';
-    } else if (res.status === 400 && errBody.includes("can't parse")) {
-      hint = ' — message formatting error (MarkdownV2). The test message will be retried as plain text.';
-    } else if (res.status === 429) {
+    } else if (result.status === 400 && errBody.includes("can't parse")) {
+      hint = ' — message formatting error. Will retry as plain text.';
+    } else if (result.status === 429) {
       hint = ' — rate limited by Telegram. Wait a moment and try again.';
     }
-    throw new Error(`Telegram ${res.status}: ${errBody}${hint}`);
+    throw new Error(`Telegram ${result.status}: ${errBody}${hint}`);
   }
-  return res.json();
+  return JSON.parse(result.text);
 }
 
 export async function sendSignalAlert(signal: ConsensusResult) {
@@ -123,42 +153,33 @@ export async function sendSignalAlert(signal: ConsensusResult) {
 export async function sendTestMessage(): Promise<boolean> {
   const text = '✅ OMNISCIENT Telegram channel connected. You will receive trade signals here.';
   try {
-    // Try plain text first (most reliable for test messages)
     await sendTelegramMessage(text, 'HTML');
   } catch (e: any) {
-    // If it's a formatting error, retry without parse_mode by sending raw
     if (e.message.includes("can't parse") || e.message.includes('parse')) {
-      // Reuse sendTelegramMessage with no parse mode by calling the API directly
-      // but wrapped in the same error handling
+      // Retry as plain text (no parse_mode)
       const { token, chatId } = await getTelegramConfig();
       const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
       const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
-      let res: Response;
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 15_000);
-        res = await fetch(`https://api.telegram.org/bot${safeToken}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: safeChatId, text }),
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-      } catch (fetchErr: any) {
-        if (fetchErr.name === 'AbortError') {
+        const result = await telegramPost(
+          `https://api.telegram.org/bot${safeToken}/sendMessage`,
+          { chat_id: safeChatId, text }
+        );
+        if (result.status < 200 || result.status >= 300) {
+          const errBody = result.text;
+          let hint = '';
+          if (result.status === 400 && errBody.includes('chat not found')) {
+            hint = ' — Open Telegram, search for your bot, and send /start to it first.';
+          } else if (result.status === 404) {
+            hint = ' — Check the bot token for extra quotes/spaces.';
+          }
+          throw new Error(`Telegram ${result.status}: ${errBody}${hint}`);
+        }
+      } catch (err: any) {
+        if (err.message === 'timeout') {
           throw new Error('Telegram API request timed out (15s). api.telegram.org may be blocked from this server.');
         }
-        throw new Error(`Cannot reach api.telegram.org — network error: ${fetchErr.message || fetchErr.cause?.message || 'unknown'}.`);
-      }
-      if (!res.ok) {
-        const errBody = await res.text();
-        let hint = '';
-        if (res.status === 400 && errBody.includes('chat not found')) {
-          hint = ' — Open Telegram, search for your bot, and send /start to it first.';
-        } else if (res.status === 404) {
-          hint = ' — Check the bot token for extra quotes/spaces.';
-        }
-        throw new Error(`Telegram ${res.status}: ${errBody}${hint}`);
+        throw err;
       }
     } else {
       throw e;
