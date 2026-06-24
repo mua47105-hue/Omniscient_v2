@@ -1,6 +1,6 @@
-last_updated: 2026-06-23T20:55:00Z
-turn_count: 3
-last_commit: 99ce0a3
+last_updated: 2026-06-24T04:10:00Z
+turn_count: 4
+last_commit: 00a3119
 CAPABILITY_CHECK
 file_io: yes | terminal: yes | git: yes | network: yes
 
@@ -12,21 +12,23 @@ HANDBOOK
 - z-ai-web-dev-sdk has no reachable backend outside this sandbox — replace with a real free source, don't silence errors.
 - CRON_SECRET must be identical on main app env and scheduler mini-service env.
 - ?alerts=1 must be in the scheduler tick URL or sendAlerts is always false.
+- Supabase sync MUST resolve local cuid IDs to Supabase IDs before upserting FK tables (LlmModel, ModuleModelConfig).
 
 GOALS_LEDGER
-[x] G1 Telegram test route — VERIFIED — proof: POST /api/telegram/test returns JSON {"success":false,"error":"Telegram bot token or chat id not configured"}
-[x] G2 Scheduler sends ?alerts=1 — VERIFIED — confirmed in mini-services/scheduler/index.ts line 41
-[x] G3 Oil/forex/macro fallback chain — VERIFIED — macro/quotes returns gold price 4060.58
-[x] G4 IPO/News/EconCalendar — VERIFIED — news: 50 articles via RSS, IPO: 10+10 via ZAI, econ: 10 events
-[x] G5 CRON_SECRET + tick — VERIFIED — POST /api/scheduler/tick?alerts=1 → 200, ran=[crypto_technical/11 assets]
-[x] G6 news_sentiment 401 — VERIFIED — root cause was extractJsonArray rejecting JSON objects; fixed; analyzed:true, sentiment=45
-[x] G7 Non-crypto module dispatch — VERIFIED (DESCOPED) — news_sentiment + macro_analysis intentionally disabled, tick route returns 'not yet implemented'
-[B] G8 klines wiring — BLOCKED — tick route doesn't pass klines; scan route does; materially changes conviction (39→55 for BTC). Needs user review before activating.
-[x] G9 Watchlist prices — VERIFIED — all 11 DB assets resolve to real prices
-[x] G10 Full regression pass — VERIFIED — all goals re-verified in one pass, no regressions
+[x] G1 Telegram test route — VERIFIED — proof: POST /api/telegram/test returns JSON
+[x] G2 Scheduler sends ?alerts=1 — VERIFIED — confirmed in mini-services/scheduler/index.ts
+[x] G3 Oil/forex/macro fallback chain — VERIFIED — macro/quotes returns gold price
+[x] G4 IPO/News/EconCalendar — VERIFIED — news: 50 articles, IPO: 10+10, econ: 10 events
+[x] G5 CRON_SECRET + tick — VERIFIED — POST tick → 200, ran=[crypto_technical/11 assets]
+[x] G6 news_sentiment 401 — VERIFIED — extractJsonArray now wraps single objects; analyzed:true
+[x] G7 Non-crypto module dispatch — VERIFIED (DESCOPED) — intentionally disabled
+[B] G8 klines wiring — BLOCKED — materially changes conviction scores; needs user review
+[x] G9 Watchlist prices — VERIFIED — 11/11 assets with real prices
+[x] G10 Full regression pass — VERIFIED — no regressions
+[x] G11 Supabase sync FK violations — VERIFIED — sync now resolves local IDs to Supabase IDs for LlmModel + ModuleModelConfig
 
 NEWLY_DISCOVERED
-- OPEN: klines is NOT being passed to computeConsensus in scheduler/tick/route.ts (lines 116-119, 226-231). BLOCKED pending user review.
+- OPEN: klines is NOT being passed to computeConsensus in scheduler/tick/route.ts. BLOCKED pending user review.
 - OPEN: Dev server dies between tool calls — sandbox reaps background processes.
 
 DO_NOT_RE_ATTEMPT
