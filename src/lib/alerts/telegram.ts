@@ -49,7 +49,18 @@ function telegramPost(url: string, body: any, timeoutMs = 15_000): Promise<{ sta
         res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }));
       }
     );
-    req.on('error', (e) => reject(e));
+    req.on('error', (e) => {
+      // Distinguish timeout from other network errors
+      if (e.message === 'timeout' || e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET') {
+        reject(new Error('timeout'));
+      } else if (e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN') {
+        reject(new Error('DNS resolution failed for api.telegram.org — the server cannot resolve the hostname'));
+      } else if (e.code === 'ECONNREFUSED') {
+        reject(new Error('Connection refused by api.telegram.org — the service may be blocked from this IP'));
+      } else {
+        reject(new Error(`network error: ${e.message} (code: ${e.code || 'unknown'})`));
+      }
+    });
     req.on('timeout', () => { req.destroy(new Error('timeout')); });
     req.write(bodyStr);
     req.end();

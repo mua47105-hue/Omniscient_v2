@@ -50,8 +50,21 @@ type AlertThresholds = Record<string, { minConviction: number; directions: Direc
 
 // ----- Helpers -----
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init);
-  const j: ApiResult<T> = await r.json().catch(() => ({ success: false, error: 'Invalid JSON' }) as any);
+  let r: Response;
+  try {
+    r = await fetch(url, init);
+  } catch (fetchErr: any) {
+    // Browser fetch failed — connection dropped, timeout, or network error
+    throw new Error(fetchErr.message || 'Network error — the server may be unreachable or the request timed out.');
+  }
+  const text = await r.text();
+  let j: ApiResult<T>;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    // Non-JSON response (HTML error page, empty body, etc.)
+    throw new Error(`Server returned ${r.status} ${r.statusText} (non-JSON response)`);
+  }
   if (!j.success) throw new Error(j.error ?? 'Request failed');
   return j.data as T;
 }
