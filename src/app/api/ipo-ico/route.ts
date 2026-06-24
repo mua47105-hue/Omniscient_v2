@@ -275,6 +275,15 @@ export async function GET(req: NextRequest) {
       data: { ipos, icos },
     });
   } catch (e: any) {
-    return NextResponse.json<ApiResult<never>>({ success: false, error: e.message }, { status: 500 });
+    // If ZAI web_search is unreachable (HF Spaces), return a clear 503
+    // instead of a 500 — this is a known infrastructure limitation, not a bug.
+    const msg = e?.message || String(e);
+    if (msg.includes('web_search') || msg.includes('ZAI') || msg.includes('fetch')) {
+      return NextResponse.json<ApiResult<never>>(
+        { success: false, error: 'IPO/ICO data source unavailable — the web search service is not reachable from this deployment.' },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json<ApiResult<never>>({ success: false, error: msg }, { status: 500 });
   }
 }

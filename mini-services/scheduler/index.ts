@@ -38,7 +38,7 @@ async function tick() {
     if (CRON_SECRET) {
       headers['X-Cron-Secret'] = CRON_SECRET;
     }
-    const res = await fetch(`${APP_URL}/api/scheduler/tick`, {
+    const res = await fetch(`${APP_URL}/api/scheduler/tick?alerts=1`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ ts: Date.now() }),
