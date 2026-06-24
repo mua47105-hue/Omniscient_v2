@@ -1,42 +1,45 @@
-last_updated: 2026-06-24T05:30:00Z
-turn_count: 6
-last_commit: b637925
+last_updated: 2026-06-24T06:00:00Z
+turn_count: 7
+last_commit: ce72ea7
 CAPABILITY_CHECK
 file_io: yes | terminal: yes | git: yes | network: yes
 
 HANDBOOK
-- Never wrap a known-broken call in try/catch returning empty/default. ipo-ico/route.ts webSearch() is the canonical example of what NOT to do.
-- Never remove a rung from an existing fallback chain (Yahoo→Binance, multi-source, LLM auto-fallback) — only add.
+- Never wrap a known-broken call in try/catch returning empty/default.
+- Never remove a rung from an existing fallback chain.
 - Don't touch gateDecide() thresholds or deterministic consensus math unless a goal requires it.
 - No schema migrations unless a goal requires one.
-- z-ai-web-dev-sdk has no reachable backend outside this sandbox — replace with a real free source, don't silence errors.
+- z-ai-web-dev-sdk has no reachable backend outside this sandbox.
 - CRON_SECRET must be identical on main app env and scheduler mini-service env.
-- ?alerts=1 must be in the scheduler tick URL or sendAlerts is always false.
-- Supabase sync MUST resolve local cuid IDs to Supabase IDs before upserting FK tables (LlmModel, ModuleModelConfig).
-- Telegram API calls MUST use node:https, NOT fetch() — Next.js patches fetch on HF Spaces and it can't reach api.telegram.org. Same pattern as LLM router and macro client.
-- Frontend api() helpers MUST wrap fetch() in try/catch — raw "fetch failed" TypeError is shown to user otherwise.
+- ?alerts=1 must be in the scheduler tick URL.
+- Supabase sync MUST resolve local cuid IDs to Supabase IDs before upserting FK tables.
+- Telegram API calls MUST use node:https with family:4 (force IPv4), NOT fetch().
+- Frontend api() helpers MUST wrap fetch() in try/catch.
+- api.telegram.org may be genuinely blocked from HF Space datacenter IPs — if timeout persists after IPv4+retry, Telegram alerts won't work from HF Spaces.
 
 GOALS_LEDGER
-[x] G1 Telegram test route — VERIFIED — proof: POST /api/telegram/test returns JSON {"success":false,"error":"Telegram bot token or chat id not configured"}
-[x] G2 Scheduler sends ?alerts=1 — VERIFIED — confirmed in mini-services/scheduler/index.ts line 41
-[x] G3 Oil/forex/macro fallback chain — VERIFIED — macro/quotes returns gold price
-[x] G4 IPO/News/EconCalendar — VERIFIED — news: 50 articles, IPO: 10+10, econ: 10 events
-[x] G5 CRON_SECRET + tick — VERIFIED — POST tick → 200, ran=[crypto_technical/11 assets]
-[x] G6 news_sentiment 401 — VERIFIED — extractJsonArray now wraps single objects; analyzed:true, sentiment=45
-[x] G7 Non-crypto module dispatch — VERIFIED (DESCOPED) — intentionally disabled
-[B] G8 klines wiring — BLOCKED — materially changes conviction scores (39→55 for BTC); needs user review before activating
-[x] G9 Watchlist prices — VERIFIED — 11/11 assets with real prices
-[x] G10 Full regression pass — VERIFIED — no regressions
-[x] G11 Supabase sync FK violations — VERIFIED — sync resolves local IDs to Supabase IDs for LlmModel + ModuleModelConfig
-[x] G12 Telegram "fetch failed" — VERIFIED — replaced fetch() with node:https (telegramPost helper); fixed frontend api() helper with try/catch; added detailed network error messages (ETIMEDOUT, ENOTFOUND, ECONNREFUSED)
+[x] G1 Telegram test route — VERIFIED
+[x] G2 Scheduler sends ?alerts=1 — VERIFIED
+[x] G3 Oil/forex/macro fallback chain — VERIFIED
+[x] G4 IPO/News/EconCalendar — VERIFIED
+[x] G5 CRON_SECRET + tick — VERIFIED
+[x] G6 news_sentiment 401 — VERIFIED
+[x] G7 Non-crypto module dispatch — VERIFIED (DESCOPED)
+[B] G8 klines wiring — BLOCKED — needs user review
+[x] G9 Watchlist prices — VERIFIED
+[x] G10 Full regression pass — VERIFIED
+[x] G11 Supabase sync FK violations — VERIFIED
+[x] G12 Telegram "fetch failed" — VERIFIED (node:https + IPv4 + retry deployed)
+[ ] G13 Telegram timeout on HF Spaces — VERIFIED-CODE-DEPLOYED but CANNOT VERIFY RUNTIME (don't know user's HF Space password to test the Telegram test button)
 
 NEWLY_DISCOVERED
-- OPEN: klines is NOT being passed to computeConsensus in scheduler/tick/route.ts (lines 116-119, 226-231). BLOCKED pending user review.
-- OPEN: Dev server dies between tool calls — sandbox reaps background processes. Must restart each turn.
-- OPEN: api.telegram.org may be genuinely unreachable from HF Space datacenter IPs (not just a fetch patching issue). If node:https also fails with ECONNREFUSED or ETIMEDOUT on HF Spaces, Telegram alerts will not work from that deployment. User would need a proxy or a different deployment target.
+- OPEN: klines is NOT being passed to computeConsensus in scheduler/tick/route.ts. BLOCKED pending user review.
+- OPEN: Dev server dies between tool calls — sandbox reaps background processes.
+- OPEN: HF Space has a custom APP_PASSWORD set as a secret — not "omniscient". Can't login to verify.
+- OPEN: api.telegram.org timeout from HF Spaces may be a genuine network block. Fixes applied: IPv4 force, 30s timeout, retry. If still failing, user needs a deployment that can reach api.telegram.org (Vercel, Railway, VPS).
 
 DO_NOT_RE_ATTEMPT
-- CryptoCompare news API requires key now (401). Don't try again.
-- CoinGecko /v3/news requires PRO subscription. Don't try again.
-- Finnhub news returns "Invalid API key" with demo token. Don't try again.
-- Using fetch() for Telegram API calls on HF Spaces — use node:https instead (telegramPost helper).
+- CryptoCompare news API requires key now (401).
+- CoinGecko /v3/news requires PRO subscription.
+- Finnhub news returns "Invalid API key" with demo token.
+- Using fetch() for Telegram API calls on HF Spaces.
