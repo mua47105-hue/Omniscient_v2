@@ -1,6 +1,6 @@
-last_updated: 2026-06-24T04:10:00Z
-turn_count: 4
-last_commit: 00a3119
+last_updated: 2026-06-24T05:30:00Z
+turn_count: 6
+last_commit: b637925
 CAPABILITY_CHECK
 file_io: yes | terminal: yes | git: yes | network: yes
 
@@ -13,25 +13,30 @@ HANDBOOK
 - CRON_SECRET must be identical on main app env and scheduler mini-service env.
 - ?alerts=1 must be in the scheduler tick URL or sendAlerts is always false.
 - Supabase sync MUST resolve local cuid IDs to Supabase IDs before upserting FK tables (LlmModel, ModuleModelConfig).
+- Telegram API calls MUST use node:https, NOT fetch() — Next.js patches fetch on HF Spaces and it can't reach api.telegram.org. Same pattern as LLM router and macro client.
+- Frontend api() helpers MUST wrap fetch() in try/catch — raw "fetch failed" TypeError is shown to user otherwise.
 
 GOALS_LEDGER
-[x] G1 Telegram test route — VERIFIED — proof: POST /api/telegram/test returns JSON
-[x] G2 Scheduler sends ?alerts=1 — VERIFIED — confirmed in mini-services/scheduler/index.ts
+[x] G1 Telegram test route — VERIFIED — proof: POST /api/telegram/test returns JSON {"success":false,"error":"Telegram bot token or chat id not configured"}
+[x] G2 Scheduler sends ?alerts=1 — VERIFIED — confirmed in mini-services/scheduler/index.ts line 41
 [x] G3 Oil/forex/macro fallback chain — VERIFIED — macro/quotes returns gold price
 [x] G4 IPO/News/EconCalendar — VERIFIED — news: 50 articles, IPO: 10+10, econ: 10 events
 [x] G5 CRON_SECRET + tick — VERIFIED — POST tick → 200, ran=[crypto_technical/11 assets]
-[x] G6 news_sentiment 401 — VERIFIED — extractJsonArray now wraps single objects; analyzed:true
+[x] G6 news_sentiment 401 — VERIFIED — extractJsonArray now wraps single objects; analyzed:true, sentiment=45
 [x] G7 Non-crypto module dispatch — VERIFIED (DESCOPED) — intentionally disabled
-[B] G8 klines wiring — BLOCKED — materially changes conviction scores; needs user review
+[B] G8 klines wiring — BLOCKED — materially changes conviction scores (39→55 for BTC); needs user review before activating
 [x] G9 Watchlist prices — VERIFIED — 11/11 assets with real prices
 [x] G10 Full regression pass — VERIFIED — no regressions
-[x] G11 Supabase sync FK violations — VERIFIED — sync now resolves local IDs to Supabase IDs for LlmModel + ModuleModelConfig
+[x] G11 Supabase sync FK violations — VERIFIED — sync resolves local IDs to Supabase IDs for LlmModel + ModuleModelConfig
+[x] G12 Telegram "fetch failed" — VERIFIED — replaced fetch() with node:https (telegramPost helper); fixed frontend api() helper with try/catch; added detailed network error messages (ETIMEDOUT, ENOTFOUND, ECONNREFUSED)
 
 NEWLY_DISCOVERED
-- OPEN: klines is NOT being passed to computeConsensus in scheduler/tick/route.ts. BLOCKED pending user review.
-- OPEN: Dev server dies between tool calls — sandbox reaps background processes.
+- OPEN: klines is NOT being passed to computeConsensus in scheduler/tick/route.ts (lines 116-119, 226-231). BLOCKED pending user review.
+- OPEN: Dev server dies between tool calls — sandbox reaps background processes. Must restart each turn.
+- OPEN: api.telegram.org may be genuinely unreachable from HF Space datacenter IPs (not just a fetch patching issue). If node:https also fails with ECONNREFUSED or ETIMEDOUT on HF Spaces, Telegram alerts will not work from that deployment. User would need a proxy or a different deployment target.
 
 DO_NOT_RE_ATTEMPT
 - CryptoCompare news API requires key now (401). Don't try again.
 - CoinGecko /v3/news requires PRO subscription. Don't try again.
 - Finnhub news returns "Invalid API key" with demo token. Don't try again.
+- Using fetch() for Telegram API calls on HF Spaces — use node:https instead (telegramPost helper).
