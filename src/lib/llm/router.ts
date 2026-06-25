@@ -22,13 +22,13 @@ function isOR(baseUrl: string) {
 }
 
 /** Native HTTPS POST — bypasses Next.js fetch patching + Cloudflare bot blocks.
- *  Timeout is 15s: long enough for any working model (Mistral 700ms, NIM Llama 200ms),
- *  short enough that the fallback chain doesn't waste 30s+ on a dead provider. */
+ *  Timeout is 30s: long enough for Pollinations on slow datacenter IPs (HF Spaces),
+ *  short enough that the fallback chain doesn't waste 60s+ on a dead provider. */
 function nativeHttpsPost(
   url: string,
   headers: Record<string, string>,
   bodyStr: string,
-  timeoutMs = 15000
+  timeoutMs = 30000
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
@@ -58,7 +58,7 @@ function nativeHttpsPost(
 function nativeHttpsPostGemini(
   url: string,
   bodyStr: string,
-  timeoutMs = 15000
+  timeoutMs = 30000
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
