@@ -57,7 +57,7 @@ Give a concise trading read for the next ${interval} timeframe. Respond as JSON 
             { role: 'user', content: prompt },
           ],
           temperature: llmCfg.temperature,
-          jsonMode: true,
+          jsonMode: false, // OFF for Pollinations compatibility (returns empty with json_mode)
           maxTokens: 400,
           _module: 'crypto_technical',
           _asset: symbol,

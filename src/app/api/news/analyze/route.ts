@@ -182,7 +182,10 @@ export async function POST(req: NextRequest) {
           { role: 'user', content: prompt },
         ],
         temperature: cfg.temperature ?? 0.2,
-        jsonMode: true,
+        // jsonMode is intentionally OFF: Pollinations (the default free LLM)
+        // returns empty content when response_format is set. The prompt
+        // explicitly requests JSON + extractJsonArray handles any prose wrapping.
+        jsonMode: false,
         maxTokens: 2000,
         _module: 'news_sentiment',
       } as any);

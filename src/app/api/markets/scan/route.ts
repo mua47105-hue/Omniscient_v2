@@ -92,7 +92,7 @@ Give a concise trading read for the next week. Respond as JSON ONLY:
             { role: 'user', content: prompt },
           ],
           temperature: llmCfg.temperature,
-          jsonMode: true,
+          jsonMode: false, // OFF for Pollinations compatibility
           maxTokens: 400,
           _module: 'macro_analysis',
           _asset: asset.symbol,
