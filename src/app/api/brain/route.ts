@@ -2,6 +2,7 @@
 // GET  → full snapshot (running, mode, config, budget, stats, watch, actions)
 // POST → { action: pause|resume|setMode|setConfig|forceRun|resetBudget, ... }
 import { NextRequest, NextResponse } from 'next/server';
+import { validateBody, schemas } from "@/lib/api/validation";
 import {
   hydrate, snapshot, setRunning, setMode, setConfig, forceRun, resetBudget, recordTrigger,
   type BrainConfig,
@@ -18,7 +19,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   await hydrate();
   try {
-    const body = await req.json();
+    const body = await validateBody(req, schemas.brain);
     const action: string = body.action;
     switch (action) {
       case 'pause':

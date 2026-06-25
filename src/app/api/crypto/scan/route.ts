@@ -1,4 +1,5 @@
 // Deep analysis scan for a single asset — runs all enabled layers + consensus.
+import { validateBody, schemas } from "@/lib/api/validation";
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getKlines, getOrderBook, getFundingRate, getTicker24h } from '@/lib/market/binance';
@@ -16,7 +17,7 @@ export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
-    const { symbol, interval = '4h', sendAlert = false } = await req.json();
+    const { symbol, interval, sendAlert } = await validateBody(req, schemas.cryptoScan);
     if (!symbol) return NextResponse.json({ success: false, error: 'symbol required' }, { status: 400 });
 
     // Fetch asset

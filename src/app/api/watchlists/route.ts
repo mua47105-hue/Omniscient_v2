@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ApiResult } from '@/lib/types';
 
+import { validateBody, schemas } from "@/lib/api/validation";
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
@@ -11,7 +12,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await validateBody(req, schemas.watchlists);
     const { id, name, assetClass, symbols, isActive } = body;
     if (id) {
       const updated = await db.watchlist.update({

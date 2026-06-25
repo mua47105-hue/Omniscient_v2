@@ -2,6 +2,7 @@
 //
 // WHY THIS EXISTS:
 // The Settings → Supabase page has a "Test Connection" button that POSTs the
+import { validateBody, schemas } from "@/lib/api/validation";
 // user's Supabase URL + anon key here. Without this route, the request fell
 // through to Next.js's 404 HTML page, the frontend's JSON.parse(text) failed,
 // and the user saw "Server error — check if DATABASE_URL is configured" — a
@@ -36,7 +37,7 @@ interface TestResultData {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json().catch(() => ({}))) as TestBody;
+    const body = await validateBody(req, schemas.supabaseTest) as any;
 
     // If the user provided URL + anon key in the request body, test those
     // (this is the "Test" button flow — tests before/after saving).

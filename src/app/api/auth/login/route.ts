@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { getSetting, SETTING_KEYS } from '@/lib/config/settings';
 import { HF_SECRETS } from '@/lib/runtime';
 import { createSessionToken } from '@/lib/auth/session';
+import { validateBody, schemas } from "@/lib/api/validation";
 import type { ApiResult } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body = await req.json().catch(() => ({}));
+    const body = await validateBody(req, schemas.login);
     const { password } = body;
 
     if (typeof password !== 'string' || password.length === 0) {

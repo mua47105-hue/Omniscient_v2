@@ -3,6 +3,7 @@
 //   POST   /api/price-alerts                              → create new alert
 //   DELETE /api/price-alerts?id=...                       → delete alert
 //   PATCH  /api/price-alerts?id=...                       → update status (active/disabled) or other fields
+import { validateBody, schemas } from "@/lib/api/validation";
 // Schema-version-aware db singleton — see src/lib/db.ts.
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -44,7 +45,7 @@ interface CreateBody {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as CreateBody;
+    const body = await validateBody(req, schemas.priceAlerts) as any;
     const assetSymbol = (body.assetSymbol || '').trim().toUpperCase();
     const condition = (body.condition || '').trim();
     const targetPrice = Number(body.targetPrice);

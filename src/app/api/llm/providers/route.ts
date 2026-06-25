@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { redactProvider, safeError } from '@/lib/security/redact';
 import type { ApiResult } from '@/lib/types';
+import { validateBody, schemas } from "@/lib/api/validation";
 
 export const dynamic = 'force-dynamic';
 
@@ -46,7 +47,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => null);
+    const body = await validateBody(req, schemas.llmProviders);
     if (!body || typeof body !== 'object') {
       return NextResponse.json<ApiResult<never>>({ success: false, error: 'Invalid JSON body' }, { status: 400 });
     }

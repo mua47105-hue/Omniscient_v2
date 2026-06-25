@@ -3,6 +3,7 @@
 //   POST   /api/portfolio                      → create new holding
 //   DELETE /api/portfolio?id=...                → delete a holding
 // Schema-version-aware db singleton — see src/lib/db.ts.
+import { validateBody, schemas } from "@/lib/api/validation";
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
@@ -227,7 +228,7 @@ interface CreateBody {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as CreateBody;
+    const body = await validateBody(req, schemas.portfolio) as any;
     const assetSymbol = (body.assetSymbol || '').trim().toUpperCase();
     const quantity = Number(body.quantity);
     const entryPrice = Number(body.entryPrice);

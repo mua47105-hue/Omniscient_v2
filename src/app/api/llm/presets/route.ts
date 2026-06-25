@@ -2,6 +2,7 @@
 // providers so the UI can show a "Quick Add" grid. Users click a preset,
 // the provider + models are created with a placeholder key, and the user
 // just pastes their API key.
+import { validateBody, schemas } from "@/lib/api/validation";
 import { NextResponse, NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { PROVIDER_PRESETS } from '@/lib/llm/presets';
@@ -23,7 +24,7 @@ export async function GET() {
 // If apiKey is provided, uses it. Otherwise uses the placeholder.
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => null);
+    const body = await validateBody(req, schemas.llmPresets);
     if (!body || typeof body !== 'object') {
       return NextResponse.json<ApiResult<never>>({ success: false, error: 'Invalid JSON body' }, { status: 400 });
     }

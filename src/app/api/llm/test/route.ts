@@ -2,6 +2,7 @@
 //
 // Sends a trivial prompt ("Reply with: OK") to verify the provider+model+key
 // combination works end-to-end. Returns the raw content + latency.
+import { validateBody, schemas } from "@/lib/api/validation";
 //
 // IMPORTANT: This endpoint can test ANY provider, even inactive ones — so users
 // can verify a key works BEFORE activating the provider. The complete() function
@@ -24,7 +25,7 @@ interface TestResult {
 
 export async function POST(req: NextRequest) {
   try {
-    const { provider, model } = await req.json();
+    const { provider, model } = await validateBody(req, schemas.llmTest);
     if (!provider || typeof provider !== 'string') {
       return NextResponse.json<ApiResult<never>>(
         { success: false, error: 'provider (string) is required' },

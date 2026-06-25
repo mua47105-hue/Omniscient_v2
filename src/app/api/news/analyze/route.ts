@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveModel, completeWithAutoFallback } from '@/lib/llm/router';
 import { NEWS_SENTIMENT_SYSTEM } from '@/lib/llm/prompts';
+import { validateBody, schemas } from "@/lib/api/validation";
 import { extractJsonArray } from '@/lib/llm/json';
 import type { ApiResult } from '@/lib/types';
 
@@ -135,7 +136,7 @@ function buildSummary(results: SentimentResult[]): SentimentSummary {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => null);
+    const body = await validateBody(req, schemas.newsAnalyze);
     const articles: ArticleInput[] = Array.isArray(body?.articles) ? body.articles : [];
     if (articles.length === 0) {
       const resp: NotAnalyzedResponse = {

@@ -2,6 +2,7 @@
 // Used by the Settings → Providers → "Module → Model Mapping" section.
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { validateBody, schemas } from "@/lib/api/validation";
 import type { ApiResult } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -20,7 +21,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await validateBody(req, schemas.llmModuleConfigs);
     const { moduleKey, layer, modelId, providerId, temperature, systemPrompt, enabled } = body;
 
     if (!moduleKey || !layer) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ApiResult } from '@/lib/types';
 
+import { validateBody, schemas } from "@/lib/api/validation";
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await validateBody(req, schemas.signals);
     const signal = await db.signal.create({
       data: {
         assetId: body.assetId,

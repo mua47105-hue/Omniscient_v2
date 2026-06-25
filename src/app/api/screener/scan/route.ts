@@ -3,6 +3,7 @@
 // Runs the Market Screener: scans all USDT tickers from Binance, filters by
 // price/volume, fetches klines for the top N candidates by 24h quote volume,
 // computes indicators, applies the active technical filters, computes a
+import { validateBody, schemas } from "@/lib/api/validation";
 // conviction score (0-100), and returns sorted results.
 //
 // Request body (JSON):
@@ -195,7 +196,7 @@ export async function POST(req: NextRequest) {
   try {
     let body: ScanRequest = {};
     try {
-      body = (await req.json()) as ScanRequest;
+      body = await validateBody(req, schemas.screenerScan) as any;
     } catch {
       // Empty body is fine — we'll use defaults.
     }

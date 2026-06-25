@@ -2,6 +2,7 @@
 // Mirrors /api/crypto/scan but for non-crypto assets. Runs technical indicators + consensus engine.
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { validateBody, schemas } from "@/lib/api/validation";
 import { getQuoteWithFallback } from '@/lib/market/macro';
 import { computeIndicators } from '@/lib/market/indicators';
 import { computeConsensus, shouldAlert, buildTechnicalLayer } from '@/lib/analysis/consensus';
@@ -17,7 +18,7 @@ export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
-    const { symbol, interval = '1d', sendAlert = false } = await req.json();
+    const { symbol, interval, sendAlert } = await validateBody(req, schemas.marketsScan);
     if (!symbol) return NextResponse.json({ success: false, error: 'symbol required' }, { status: 400 });
 
     const asset = await db.asset.findUnique({ where: { symbol } });

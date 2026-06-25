@@ -3,6 +3,7 @@ import { getSetting, setSetting, getAllSettings } from '@/lib/config/settings';
 import { redactSettings, safeError } from '@/lib/security/redact';
 import type { ApiResult } from '@/lib/types';
 
+import { validateBody, schemas } from "@/lib/api/validation";
 export const dynamic = 'force-dynamic';
 
 // In-memory fallback for when the database is unavailable
@@ -26,7 +27,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   let body: any;
   try {
-    body = await req.json().catch(() => null);
+    body = await validateBody(req, schemas.settings);
     if (!body || typeof body !== 'object') {
       return NextResponse.json<ApiResult<never>>({ success: false, error: 'Invalid JSON body' }, { status: 400 });
     }
