@@ -150,7 +150,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Cap batch size to keep token budgets sane.
-    const batch = articles.slice(0, 25);
+    // 10 articles max — Pollinations on HF Spaces times out or returns empty
+    // content with larger prompts due to rate-limiting/throttling.
+    const batch = articles.slice(0, 10);
 
     // Tiered: resolve configured LLM. If nothing is wired, return gracefully.
     const cfg = await resolveModel('news_sentiment', 'sentiment');
@@ -203,6 +205,37 @@ export async function POST(req: NextRequest) {
     const parsed = extractJsonArray(result.content);
     if (!parsed || parsed.length === 0) {
       console.error('[news/analyze] LLM returned unparseable content. First 200 chars:', result.content?.slice(0, 200));
+      // If content is empty (Pollinations sometimes returns empty under load),
+      // retry once with a smaller batch (top 5 articles)
+      if (!result.content || result.content.trim().length === 0) {
+        console.log('[news/analyze] Empty content — retrying with smaller batch (5 articles)...');
+        const smallerBatch = batch.slice(0, 5);
+        const retryPrompt = buildPrompt(smallerBatch);
+        try {
+          const retryResult = await completeWithAutoFallback({
+            provider: cfg.providerName,
+            model: cfg.modelId,
+            messages: [
+              { role: 'system', content: cfg.systemPrompt || NEWS_SENTIMENT_SYSTEM },
+              { role: 'user', content: retryPrompt },
+            ],
+            temperature: cfg.temperature ?? 0.2,
+            jsonMode: false,
+            maxTokens: 1000,
+            _module: 'news_sentiment',
+          } as any);
+          const retryParsed = extractJsonArray(retryResult.content);
+          if (retryParsed && retryParsed.length > 0) {
+            console.log('[news/analyze] Retry succeeded with', retryParsed.length, 'results');
+            const retryResults: SentimentResult[] = retryParsed.slice(0, smallerBatch.length).map((raw: any, i: number) => normalizeResult(raw, i));
+            const retrySummary = buildSummary(retryResults);
+            const resp: AnalyzedResponse = { analyzed: true, results: retryResults, summary: retrySummary, model: retryResult.usedProvider ? `${retryResult.usedProvider}/${retryResult.usedModel}` : `${cfg.providerName}/${cfg.modelId}` };
+            return NextResponse.json<ApiResult<AnalyzedResponse>>({ success: true, data: resp });
+          }
+        } catch (retryErr: any) {
+          console.error('[news/analyze] Retry also failed:', retryErr.message);
+        }
+      }
       const resp: NotAnalyzedResponse = {
         analyzed: false,
         message: 'LLM returned no parseable JSON array. Try again or try a different model.',
