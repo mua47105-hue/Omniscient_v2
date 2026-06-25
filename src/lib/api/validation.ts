@@ -107,7 +107,8 @@ export const schemas = {
     mode: z.enum(['auto', 'manual']).optional(),
   }).passthrough(),
 
-  // News analyze
+  // News analyze — frontend sends all fetched articles (up to 50);
+  // backend internally caps to 25 per batch (route.ts line 153)
   newsAnalyze: z.object({
     articles: z.array(z.object({
       title: z.string().min(1).max(500),
@@ -115,7 +116,7 @@ export const schemas = {
       source: z.string().max(200).optional(),
       url: z.string().url().optional(),
       publishedAt: z.string().optional(),
-    })).min(1).max(25),
+    })).min(1).max(100),
   }),
 
   // Portfolio
