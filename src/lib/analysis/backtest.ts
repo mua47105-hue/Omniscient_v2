@@ -11,7 +11,9 @@
  *  - Long-only. One position at a time.
  *  - Entry: on day `i`, if no position is open, evaluate every active entry
  *    rule against the indicator series ending at bar `i`. If ANY rule passes,
- *    open a long position at the close of bar `i`.
+ *    open a long position at the OPEN of bar `i+1` (next-bar open fill).
+ *    This eliminates same-bar lookahead bias: you can't trade on bar i's close
+ *    using indicators derived from that same close.
  *  - Exit: on day `i`, if a position is open, evaluate (in order):
  *      1. Hard stop-loss  (intrabar low touches SL price)  → exit at SL price
  *      2. Hard take-profit (intrabar high touches TP price) → exit at TP price
@@ -627,8 +629,9 @@ export function runBacktest(params: BacktestParams): BacktestResult {
 
       if (!position) {
         // ---- Out of position: check entries ----
-        // Only ONE entry per bar (re-check after a same-bar exit doesn't enter;
-        // we wait until the next bar to avoid lookahead on the exit price).
+        // Signal is evaluated at bar i, but the fill happens at bar i+1's open
+        // to eliminate same-bar lookahead bias (you can't fill at bar i's close
+        // using indicators derived from that same close).
         let entry = false;
         for (const rule of activeEntryRules) {
           if (rule.test(ctx)) {
@@ -637,15 +640,20 @@ export function runBacktest(params: BacktestParams): BacktestResult {
           }
         }
         if (entry) {
-          const positionValue = (equity * positionSizePct) / 100;
-          const size = positionValue / k.close;
-          position = {
-            entryPrice: k.close,
-            size,
-            entryIndex: i,
-            highSince: k.high,
-            lowSince: k.low,
-          };
+          // Fill at NEXT bar's open (i+1). If this is the last bar, skip entry.
+          const nextBar = i + 1 < n ? klines[i + 1] : null;
+          if (nextBar) {
+            const fillPrice = nextBar.open;
+            const positionValue = (equity * positionSizePct) / 100;
+            const size = positionValue / fillPrice;
+            position = {
+              entryPrice: fillPrice,
+              size,
+              entryIndex: i + 1, // record the fill bar, not the signal bar
+              highSince: nextBar.high,
+              lowSince: nextBar.low,
+            };
+          }
         }
       }
     }
