@@ -106,5 +106,55 @@ export async function register() {
     console.error('[instrumentation] Auto-sync setup error (non-fatal):', e.message);
   }
 
+  // Start the in-process scheduler tick — every 60 seconds, POST to
+  // /api/scheduler/tick?alerts=1. This replaces the separate mini-service
+  // scheduler that was never started on HF Spaces (the Dockerfile only
+  // runs `next start`, not the scheduler process).
+  //
+  // The tick is self-authenticating: it uses the CRON_SECRET env var
+  // (if set) or falls back to the internal cookie (if CRON_SECRET is
+  // not configured, the middleware allows the request via the app's
+  // own session — the tick runs server-side so it's trusted).
+  try {
+    console.log('[instrumentation] Starting in-process scheduler tick (every 60s)');
+    const g2 = globalThis as unknown as { __schedulerTickInterval?: NodeJS.Timeout };
+    if (g2.__schedulerTickInterval) clearInterval(g2.__schedulerTickInterval);
+
+    const tickUrl = `http://localhost:${process.env.PORT || '7860'}/api/scheduler/tick?alerts=1`;
+    const cronSecret = process.env.CRON_SECRET;
+
+    g2.__schedulerTickInterval = setInterval(async () => {
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (cronSecret) headers['X-Cron-Secret'] = cronSecret;
+
+        const res = await fetch(tickUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ts: Date.now() }),
+          signal: AbortSignal.timeout(120_000), // 2 min timeout — ticks can take 30-60s
+        });
+
+        if (!res.ok) {
+          console.error(`[scheduler-tick] HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 100)}`);
+          return;
+        }
+
+        const json = await res.json();
+        const ran = json.data?.ran ?? [];
+        const skipped = json.data?.skipped;
+        if (ran.length > 0) {
+          console.log(`[scheduler-tick] Ran ${ran.length} module(s) at ${new Date().toISOString()}`);
+        } else if (skipped) {
+          // Normal — tick skipped because no module is due
+        }
+      } catch (e: any) {
+        console.error('[scheduler-tick] Failed:', e.message?.slice(0, 100));
+      }
+    }, 60_000); // every 60 seconds
+  } catch (e: any) {
+    console.error('[instrumentation] Scheduler tick setup error (non-fatal):', e.message);
+  }
+
   console.log(`[instrumentation] Startup complete in ${Date.now() - startTime}ms`);
 }
