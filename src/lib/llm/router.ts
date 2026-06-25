@@ -471,9 +471,11 @@ export async function completeWithAutoFallback(
   } catch (primaryErr: any) {
     console.log(`[llm] Primary provider ${req.provider} failed: ${primaryErr.message.slice(0, 100)} — trying fallbacks...`);
 
-    // Get all other active providers
+    // Get all other providers — include inactive ones if they have an env-var
+    // key override (HF Space Secret). This ensures providers configured via
+    // env vars are tried even if the user hasn't toggled them active in the UI.
     const allProviders = await db.llmProvider.findMany({
-      where: { isActive: true, name: { not: req.provider } },
+      where: { name: { not: req.provider } },
       include: { models: { where: { isActive: true }, take: 1 } },
     });
 
@@ -499,7 +501,10 @@ export async function completeWithAutoFallback(
       if (p.models.length === 0) continue;
       const envKeyName = ENV_KEY_FOR_PROVIDER_STATIC[p.name];
       const hasEnvOverride = envKeyName && process.env[envKeyName] && !process.env[envKeyName]!.startsWith('PASTE_');
+      // Skip providers with placeholder keys UNLESS they have an env-var override
       if (!hasEnvOverride && (p.apiKey.startsWith('PASTE_') || p.apiKey.startsWith('YOUR_'))) continue;
+      // Skip inactive providers UNLESS they have an env-var override
+      if (!p.isActive && !hasEnvOverride) continue;
       try {
         const result = await callProvider(p, p.models[0].modelId, req.messages, req);
         console.log(`[llm] Fallback to ${p.name}/${p.models[0].modelId} succeeded`);
