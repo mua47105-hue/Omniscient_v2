@@ -1,216 +1,108 @@
-// Economic calendar — tiered: Finnhub API (if user key configured) → z-ai web search fallback.
+// Economic calendar — tiered: Finnhub API (if user key configured) → clear
+// "not available" message when no key is set.
+//
+// Previously used z-ai-web-dev-sdk for web search fallback, but ZAI is not
+// reachable on Hugging Face Spaces (no .z-ai-config file, and the SDK
+// requires a config that doesn't exist in that environment). Removed ZAI
+// dependency entirely — the route now works with Finnhub only, and returns
+// a clear message when no Finnhub key is configured.
+//
+// To enable: set FINNHUB_API_KEY in HF Space Secrets or Settings → Data Sources.
+
 import { NextRequest, NextResponse } from 'next/server';
-import ZAI from 'z-ai-web-dev-sdk';
+import https from 'node:https';
 import { getSetting, SETTING_KEYS } from '@/lib/config/settings';
 import type { ApiResult } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const revalidate = 300; // 5 min cache
 
-export interface EconomicEvent {
-  date: string;        // ISO date (YYYY-MM-DD)
-  time?: string;       // e.g. "8:30 AM ET"
-  country: string;     // "US", "EU", "IN", etc.
-  event: string;       // "CPI m/m", "Non-Farm Payrolls"
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface EconomicEvent {
+  date: string;       // ISO date YYYY-MM-DD
+  time?: string;      // HH:mm (UTC) or "All Day"
+  country: string;    // "US", "EU", "IN", etc.
+  event: string;      // "Fed Rate Decision", "CPI", etc.
   impact: 'high' | 'medium' | 'low';
-  actual?: string;
   forecast?: string;
   previous?: string;
-  source?: string;
+  source: string;
   url?: string;
 }
 
 interface CalendarResponse {
   events: EconomicEvent[];
-  source: 'finnhub' | 'web-search';
+  source: string;
 }
 
-// ---------- Helpers ----------
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function fmtDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return d.toISOString().slice(0, 10);
 }
 
-// Map Finnhub impact (numeric/string) → high/medium/low
 function mapFinnhubImpact(impact: any): 'high' | 'medium' | 'low' {
-  const v = Number(impact);
-  if (!Number.isNaN(v)) {
-    if (v >= 3) return 'high';
-    if (v === 2) return 'medium';
-    return 'low';
-  }
-  const s = String(impact || '').toLowerCase();
-  if (s.includes('high') || s.includes('red') || s === '3') return 'high';
-  if (s.includes('med') || s.includes('orange') || s === '2') return 'medium';
+  const n = typeof impact === 'string' ? parseInt(impact) : impact;
+  if (n === 3) return 'high';
+  if (n === 2) return 'medium';
   return 'low';
 }
 
-// Detect impact from event name keywords (used by web-search fallback)
-function inferImpactFromName(name: string): 'high' | 'medium' | 'low' {
-  const n = name.toLowerCase();
-  const highKw = [
-    'cpi', 'nonfarm', 'non-farm', 'non farm', 'nfp', 'fed rate', 'fomc',
-    'interest rate', 'rate decision', 'policy rate', 'gdp', 'ecb rate',
-    'boe rate', 'boj rate', 'rbca rate', 'rba rate', 'unemployment rate',
-    'core cpi', 'core pce', 'pce price', 'ppr decision', 'central bank',
-    'press conference', 'fed chair', 'ecb president',
-  ];
-  const medKw = [
-    'retail sales', 'pmi', 'ism', 'jobless claims', 'unemployment',
-    'ppi', 'trade balance', 'industrial production', 'consumer confidence',
-    'housing starts', 'building permits', 'durable goods', 'zew', 'ifo',
-  ];
-  if (highKw.some((k) => n.includes(k))) return 'high';
-  if (medKw.some((k) => n.includes(k))) return 'medium';
-  return 'low';
+function nativeHttpsGet(url: string, timeoutMs = 15000): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { timeout: timeoutMs, headers: { 'User-Agent': 'OMNISCIENT/1.0' } }, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text: body }));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+  });
 }
 
-// Detect country from event/source text (web-search fallback)
-function inferCountry(text: string): string {
-  const t = text.toLowerCase();
-  if (/(united states|\bus\b|u\.s\.|america|fed|fomc|nfp|nonfarm|wall street)/.test(t)) return 'US';
-  if (/(eurozone|euro area|\beu\b|ecb|germany|france|italy|spain|iem|eu area)/.test(t)) return 'EU';
-  if (/(india|\bin\b|nse|bse|rbi|reserve bank of india|inr|rupee)/.test(t)) return 'IN';
-  if (/(united kingdom|\buk\b|u\.k\.|britain|boe|bank of england|gbp|pound sterling)/.test(t)) return 'UK';
-  if (/(japan|\bjp\b|boj|bank of japan|yen|jpy|nikkei)/.test(t)) return 'JP';
-  if (/(china|prc|pboc|yuan|renminbi|\bcny\b)/.test(t)) return 'CN';
-  if (/(canada|canadian|boc|bank of canada|cad|loonie)/.test(t)) return 'CA';
-  if (/(australia|australian|rba|aud)/.test(t)) return 'AU';
-  if (/(switzerland|swiss|snb|chf)/.test(t)) return 'CH';
-  return 'US';
-}
+// ---------------------------------------------------------------------------
+// Source 1: Finnhub (requires user API key — free tier: 60 calls/min)
+// ---------------------------------------------------------------------------
 
-// Pull an ISO date out of a free-form snippet/title
-function extractDate(text: string, fallbackISO: string): string {
-  if (!text) return fallbackISO;
-  // Look for "Mon, DD" or "Month DD, YYYY" or "DD Month YYYY" or "YYYY-MM-DD"
-  const monthMap: Record<string, number> = {
-    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
-    may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
-    september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
-  };
-  const now = new Date();
-  const year = now.getFullYear();
-
-  // "2025-06-18" or "06/18/2025"
-  const iso = text.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const us = text.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (us) {
-    const m = String(us[1]).padStart(2, '0');
-    const d = String(us[2]).padStart(2, '0');
-    return `${us[3]}-${m}-${d}`;
-  }
-  // "June 18" / "Jun 18" / "June 18, 2025"
-  const m1 = text.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:,?\s*(\d{4}))?/i);
-  if (m1) {
-    const mo = monthMap[m1[1].toLowerCase()];
-    const d = String(Number(m1[2])).padStart(2, '0');
-    const y = m1[3] ? m1[3] : year;
-    if (mo) return `${y}-${String(mo).padStart(2, '0')}-${d}`;
-  }
-  // "18 June 2025" / "18 Jun"
-  const m2 = text.match(/(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*(?:,?\s*(\d{4}))?/i);
-  if (m2) {
-    const mo = monthMap[m2[2].toLowerCase()];
-    const d = String(Number(m2[1])).padStart(2, '0');
-    const y = m2[3] ? m2[3] : year;
-    if (mo) return `${y}-${String(mo).padStart(2, '0')}-${d}`;
-  }
-  return fallbackISO;
-}
-
-// ---------- Source 1: Finnhub ----------
 async function fetchFinnhub(apiKey: string, fromISO: string, toISO: string): Promise<EconomicEvent[]> {
   const url = `https://finnhub.io/api/v1/calendar/economic?from=${fromISO}&to=${toISO}&token=${apiKey}`;
-  const r = await fetch(url, { cache: 'no-store' });
-  if (!r.ok) {
-    throw new Error(`Finnhub ${r.status}: ${await r.text().catch(() => '')}`);
-  }
-  const j = await r.json();
-  const arr: any[] = j?.economicCalendar || j?.economic || [];
-  const events: EconomicEvent[] = arr.map((e: any) => {
-    const country = String(e.country || '').toUpperCase().slice(0, 2) || 'US';
-    const name = String(e.event || e.name || 'Economic Event');
-    return {
-      date: e.date ? String(e.date).slice(0, 10) : fromISO,
-      time: e.time ? String(e.time) : undefined,
-      country,
-      event: name,
-      impact: mapFinnhubImpact(e.impact),
-      actual: e.actual != null && e.actual !== '' ? String(e.actual) : undefined,
-      forecast: e.consensus != null && e.consensus !== '' ? String(e.consensus) : (e.estimate != null ? String(e.estimate) : undefined),
-      previous: e.prev != null && e.prev !== '' ? String(e.prev) : undefined,
-      source: 'Finnhub',
-      url: undefined,
-    };
-  });
-  return events;
+  const { status, text } = await nativeHttpsGet(url);
+  if (status !== 200) throw new Error(`Finnhub ${status}: ${text.slice(0, 200)}`);
+  const data = JSON.parse(text);
+  const rawEvents: any[] = data?.economicCalendar ?? data?.events ?? [];
+  if (!Array.isArray(rawEvents) || rawEvents.length === 0) return [];
+
+  return rawEvents.map((e: any) => ({
+    date: e.date || fromISO,
+    time: e.time || 'All Day',
+    country: String(e.country || '').toUpperCase().slice(0, 2) || 'US',
+    event: String(e.event || e.name || 'Economic Event').slice(0, 200),
+    impact: mapFinnhubImpact(e.impact),
+    forecast: e.forecast != null && e.forecast !== '' ? String(e.forecast) : undefined,
+    previous: e.prev != null && e.prev !== '' ? String(e.prev) : undefined,
+    source: 'Finnhub',
+  }));
 }
 
-// ---------- Source 2: web search ----------
-async function fetchWebSearch(fromISO: string, toISO: string): Promise<EconomicEvent[]> {
-  const zai = await ZAI.create();
-  const results = await zai.functions.invoke('web_search', {
-    query: 'economic calendar this week CPI NFP fed rate decision FOMC central bank unemployment',
-    num: 15,
-    recency_days: 7,
-  });
-  const arr = Array.isArray(results) ? results : [];
-  const todayISO = fromISO;
-  const events: EconomicEvent[] = [];
-  for (const r of arr as any[]) {
-    const title = r.name || r.title || '';
-    const snippet = r.snippet || '';
-    const host = r.host_name || r.source || '';
-    const blob = `${title} ${snippet}`;
-    const country = inferCountry(blob);
-    const event = title.split(' - ')[0].split(' | ')[0].slice(0, 100) || 'Economic Event';
-    const impact = inferImpactFromName(blob);
-    const date = extractDate(blob, todayISO);
-    // Pull time if mentioned
-    const timeMatch = blob.match(/\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\s*(?:ET|EST|EDT|UTC|GMT)?/);
-    const time = timeMatch ? `${timeMatch[1].toUpperCase()} ET` : undefined;
-    events.push({
-      date,
-      time,
-      country,
-      event,
-      impact,
-      actual: undefined,
-      forecast: undefined,
-      previous: undefined,
-      source: host || 'Web Search',
-      url: r.url || undefined,
-    });
-  }
-  // De-duplicate by event+date
-  const seen = new Set<string>();
-  const deduped: EconomicEvent[] = [];
-  for (const e of events) {
-    const k = `${e.date}|${e.event.toLowerCase()}|${e.country}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    deduped.push(e);
-  }
-  return deduped;
-}
+// ---------------------------------------------------------------------------
+// Route
+// ---------------------------------------------------------------------------
 
-// ---------- Route ----------
 export async function GET(_req: NextRequest) {
   const now = new Date();
-  const from = new Date(now);
   const to = new Date(now);
   to.setDate(to.getDate() + 14);
-  const fromISO = fmtDate(from);
+  const fromISO = fmtDate(now);
   const toISO = fmtDate(to);
 
-  // Try Finnhub first
+  // Try Finnhub (requires user API key)
   const finnhubKey = await getSetting<string>(SETTING_KEYS.finnhubApiKey, '');
-  if (finnhubKey && typeof finnhubKey === 'string' && finnhubKey.trim().length > 5) {
+  if (finnhubKey && typeof finnhubKey === 'string' && finnhubKey.trim().length > 5 && !finnhubKey.startsWith('PASTE_')) {
     try {
       const events = await fetchFinnhub(finnhubKey.trim(), fromISO, toISO);
       if (events.length > 0) {
@@ -219,23 +111,22 @@ export async function GET(_req: NextRequest) {
           data: { events, source: 'finnhub' },
         });
       }
-      // Empty finnhub → fall through to web search
+      // Empty finnhub → fall through to "not available"
     } catch (e: any) {
-      console.warn('[economic-calendar] Finnhub failed, falling back to web search:', e?.message);
+      console.warn('[economic-calendar] Finnhub failed:', e?.message);
+      return NextResponse.json<ApiResult<never>>(
+        { success: false, error: `Finnhub API error: ${e?.message || 'unknown'}` },
+        { status: 502 }
+      );
     }
   }
 
-  // Fallback: web search
-  try {
-    const events = await fetchWebSearch(fromISO, toISO);
-    return NextResponse.json<ApiResult<CalendarResponse>>({
-      success: true,
-      data: { events, source: 'web-search' },
-    });
-  } catch (e: any) {
-    return NextResponse.json<ApiResult<never>>(
-      { success: false, error: e?.message || 'Economic calendar fetch failed' },
-      { status: 502 },
-    );
-  }
+  // No Finnhub key configured — return clear "not available" message
+  return NextResponse.json<ApiResult<never>>(
+    {
+      success: false,
+      error: 'Economic calendar requires a Finnhub API key. Go to Settings → Data Sources → paste your Finnhub key. Free tier: finnhub.io/register',
+    },
+    { status: 200 } // 200 not 4xx — the UI should show a helpful message, not an error toast
+  );
 }
