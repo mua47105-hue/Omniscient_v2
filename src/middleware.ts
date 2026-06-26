@@ -24,6 +24,8 @@ const PUBLIC_API_ALLOWLIST = [
   '/api/health',
   '/api/setup',
   '/api/scheduler/tick',
+  '/api/telegram/webhook',
+  '/api/telegram/setup',
 ];
 
 /** Check if a request has a valid cron-secret header (for the scheduler service). */
