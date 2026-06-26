@@ -62,14 +62,22 @@ export async function POST(req: NextRequest) {
     }
 
     if (id) {
+      // CRITICAL: Don't overwrite a real API key with a redacted/placeholder value.
+      // The frontend sends provider.apiKey (redacted by GET route) when toggling
+      // active/inactive. If we saved it, the real key would be destroyed.
+      const isRedactedKey = (k: string) => !k || k.includes('…') || k.startsWith('PASTE_') || k.startsWith('YOUR_');
+      const updateData: any = { name, baseUrl, notes, isActive };
+      if (apiKey && !isRedactedKey(apiKey)) {
+        updateData.apiKey = apiKey; // only update apiKey when it's a real key
+      }
       const updated = await db.llmProvider.update({
         where: { id },
-        data: { name, baseUrl, apiKey, notes, isActive },
+        data: updateData,
       });
       return NextResponse.json<ApiResult<typeof updated>>({ success: true, data: redactProvider(updated) });
     }
     const created = await db.llmProvider.create({
-      data: { name, baseUrl, apiKey, notes, isActive: isActive ?? false },
+      data: { name, baseUrl, apiKey: apiKey || 'PASTE_YOUR_API_KEY', notes, isActive: isActive ?? false },
     });
     return NextResponse.json<ApiResult<typeof created>>({ success: true, data: redactProvider(created) });
   } catch (e) {
