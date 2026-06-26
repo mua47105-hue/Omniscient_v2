@@ -143,10 +143,36 @@ export async function syncToSupabase(): Promise<SyncSummary> {
   }
 
   // --- 1. LlmProvider (parent — upsert by name) ---
+  // CRITICAL: Don't overwrite real API keys in Supabase with placeholder keys
+  // from local SQLite. The seed creates PASTE_YOUR_* placeholders; if we push
+  // those to Supabase, they overwrite the real keys the user saved.
   try {
     const rows = await db.llmProvider.findMany({ take: 5000 });
     if (rows.length > 0) {
-      const transformed = rows.map(transformRow);
+      // Fetch existing Supabase providers to check which have real keys
+      const { data: existingSupabase } = await client.from('LlmProvider').select('name,apiKey');
+      const supabaseKeyMap = new Map<string, string>();
+      if (existingSupabase) {
+        for (const row of existingSupabase) {
+          supabaseKeyMap.set(row.name, row.apiKey || '');
+        }
+      }
+
+      const transformed = rows.map((row) => {
+        const out = transformRow(row);
+        const localKey = row.apiKey || '';
+        const localIsPlaceholder = localKey.startsWith('PASTE_') || localKey.startsWith('YOUR_') || localKey === 'pollinations-free';
+        const supabaseKey = supabaseKeyMap.get(row.name) || '';
+        const supabaseHasRealKey = supabaseKey && !supabaseKey.startsWith('PASTE_') && !supabaseKey.startsWith('YOUR_') && supabaseKey !== 'pollinations-free';
+
+        // If local key is a placeholder but Supabase has a real key,
+        // DON'T overwrite — preserve the real key AND the active state from Supabase.
+        if (localIsPlaceholder && supabaseHasRealKey) {
+          out.apiKey = supabaseKey; // preserve the real key in Supabase
+          out.isActive = true; // keep it active in Supabase (local seed marks it inactive)
+        }
+        return out;
+      });
       let synced = 0;
       for (let i = 0; i < transformed.length; i += 100) {
         synced += await upsertBatch('LlmProvider', transformed.slice(i, i + 100), 'name');
@@ -239,13 +265,12 @@ export async function syncToSupabase(): Promise<SyncSummary> {
   }
 
   // --- 4. Simple tables (no FK resolution needed) ---
-  // NOTE: DataSnapshot and Signal are NOT here — they have assetId FKs that
-  // need resolution. They are synced separately below.
+  // NOTE: Setting is NOT here — it has API keys that need protection
+  // (same as LlmProvider). Synced separately below.
   const simpleTables: { prisma: keyof typeof db; table: string; conflictKey: string }[] = [
     { prisma: 'asset', table: 'Asset', conflictKey: 'symbol' },
     { prisma: 'watchlist', table: 'Watchlist', conflictKey: 'name' },
     { prisma: 'scheduleJob', table: 'ScheduleJob', conflictKey: 'moduleKey' },
-    { prisma: 'setting', table: 'Setting', conflictKey: 'key' },
     { prisma: 'portfolioHolding', table: 'PortfolioHolding', conflictKey: 'id' },
     { prisma: 'priceAlert', table: 'PriceAlert', conflictKey: 'id' },
     { prisma: 'signalOutcome', table: 'SignalOutcome', conflictKey: 'id' },
@@ -276,6 +301,48 @@ export async function syncToSupabase(): Promise<SyncSummary> {
       totalErrors++;
       console.error(`[supabase-sync] ${table} FAILED: ${errMsg}`);
     }
+  }
+
+  // --- 4b. Setting (protect API key values from being overwritten by placeholders) ---
+  try {
+    const rows = await db.setting.findMany({ take: 5000 });
+    if (rows.length > 0) {
+      // Fetch existing Supabase settings to check which have real values
+      const { data: existingSupabase } = await client.from('Setting').select('key,value');
+      const supabaseValueMap = new Map<string, string>();
+      if (existingSupabase) {
+        for (const row of existingSupabase) {
+          supabaseValueMap.set(row.key, row.value || '');
+        }
+      }
+
+      const transformed = rows.map((row) => {
+        const out = transformRow(row);
+        const localValue = row.value || '';
+        const localIsPlaceholder = localValue.includes('PASTE_') || localValue.includes('YOUR_');
+        const supabaseValue = supabaseValueMap.get(row.key) || '';
+        const supabaseHasRealValue = supabaseValue && !supabaseValue.includes('PASTE_') && !supabaseValue.includes('YOUR_');
+
+        // If local value is a placeholder but Supabase has a real value,
+        // DON'T overwrite — preserve the real value in Supabase.
+        if (localIsPlaceholder && supabaseHasRealValue) {
+          out.value = supabaseValue; // preserve the real value
+        }
+        return out;
+      });
+      let synced = 0;
+      for (let i = 0; i < transformed.length; i += 100) {
+        synced += await upsertBatch('Setting', transformed.slice(i, i + 100), 'key');
+      }
+      results.push({ table: 'Setting', synced });
+      totalSynced += synced;
+    } else {
+      results.push({ table: 'Setting', synced: 0 });
+    }
+  } catch (e: any) {
+    results.push({ table: 'Setting', synced: 0, error: e.message?.slice(0, 200) });
+    totalErrors++;
+    console.error(`[supabase-sync] Setting FAILED: ${e.message?.slice(0, 200)}`);
   }
 
   // --- 5. Build asset ID maps for DataSnapshot and Signal FK resolution ---
