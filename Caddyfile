@@ -1,5 +1,6 @@
 # OMNISCIENT gateway config
 #
+# ─────────────────────────────────────────────────────────────────────────────
 # SEC-C1 (fixed): a previous named matcher keyed off the XTransformPort
 # query parameter and forwarded the request to localhost:<that port>. That
 # turned the public :81 listener into an OPEN INTERNAL SSRF PROXY: anyone
@@ -21,6 +22,41 @@
 # parameter is now explicitly rejected with HTTP 403 *before* it can reach
 # any forwarding logic, so the SSRF surface stays closed even if a proxy
 # rule is accidentally reintroduced later.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SEC-C2 (fixed): port :81 previously had NO authentication on any route.
+# The Next.js app has its own HMAC-signed cookie auth (src/middleware.ts),
+# but the gateway itself was an open proxy — if the app middleware were
+# ever bypassed (bug, misconfigured new route, regex edge case), every
+# internal route (settings, API keys, signals, portfolio) would be exposed.
+#
+# Fix: HTTP Basic Auth is now required on ALL proxied routes except a
+# minimal allowlist of routes that *cannot* function with gateway auth:
+#   - /lock              (the login page — users must reach it to log in)
+#   - /_next/*           (static assets so /lock can render)
+#   - /api/auth/login    (the login endpoint itself)
+#   - /api/auth/logout   (logout)
+#   - /api/health        (automated health checks — can't send credentials)
+#   - /api/telegram/webhook (Telegram servers call this inbound; they
+#                           cannot send Basic Auth credentials)
+#   - /logo.svg /robots.txt /favicon* (static assets)
+#
+# Everything else — /, /api/settings, /api/signals, /api/portfolio,
+# /api/setup, /api/telegram/setup, /api/scheduler/tick, all dashboard
+# pages — requires Basic Auth at the gateway AND cookie auth at the app.
+# This is defense in depth: an attacker must breach BOTH layers.
+#
+# The scheduler tick (/api/scheduler/tick) is NOT allowlisted here because
+# no caller goes through :81 — the in-process tick (instrumentation.ts)
+# and the mini-service both call localhost:3000/7860 directly.
+#
+# Credentials (default):  admin / omniscient
+# These match the default APP_PASSWORD (see start.sh). For production,
+# regenerate the hash and update it below:
+#   bun -e 'console.log(await Bun.password.hash("NEW_PASSWORD", "bcrypt"))'
+# The username can also be changed on the `basicauth` line below.
+# ─────────────────────────────────────────────────────────────────────────────
+
 :81 {
 	@ssrf_attempt {
 		query XTransformPort=*
@@ -29,7 +65,29 @@
 		respond "Forbidden" 403
 	}
 
+	# Public routes — NO gateway auth (login flow, health, webhooks, assets).
+	# These mirror the app's own PUBLIC_API_ALLOWLIST (src/middleware.ts)
+	# plus static assets and the /lock page.
+	@public {
+		path /lock /api/auth/login /api/auth/logout /api/health /api/telegram/webhook /logo.svg /robots.txt
+		path /_next/*
+		path /favicon*
+	}
+	handle @public {
+		reverse_proxy localhost:3000 {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Everything else — require HTTP Basic Auth at the gateway (SEC-C2).
+	# The app's own cookie auth (src/middleware.ts) runs as a second layer.
 	handle {
+		basicauth {
+			admin `$2b$10$xVqp/Ogg.v/ob4ffGEroI.Me15e1PAR3CnBL1SQeV.DUW.PKFWHCC`
+		}
 		reverse_proxy localhost:3000 {
 			header_up Host {host}
 			header_up X-Forwarded-For {remote_host}
