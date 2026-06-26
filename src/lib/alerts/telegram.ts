@@ -1,19 +1,17 @@
 // Telegram Bot alert dispatcher — sends trade-signal alerts.
 // Requires a bot token (from @BotFather) + chat id.
 //
-// IMPORTANT: Uses node:https instead of fetch() to bypass Next.js fetch
-// patching, which causes "fetch failed" on Hugging Face Spaces (the patched
-// fetch can't reach api.telegram.org from datacenter IPs).
+// IMPORTANT: Uses node:https with direct IP connection to bypass DNS issues
+// on Hugging Face Spaces. Telegram's API has multiple IPs — we try each one
+// in order. The Host header is set to api.telegram.org so TLS SNI works.
 
 import https from 'node:https';
+import dns from 'node:dns';
 import { db } from '@/lib/db';
 import { getSetting } from '@/lib/config/settings';
 import type { ConsensusResult } from '@/lib/types';
 
 async function getTelegramConfig() {
-  // IMPORTANT: use getSetting() which JSON-parses the stored value.
-  // Reading db.setting.findUnique().value directly returns the raw JSON-stringified
-  // value (e.g. '"abc123"' with quotes), which breaks Telegram API calls (404).
   const token = await getSetting<string>('telegram_bot_token', '');
   const chatId = await getSetting<string>('telegram_chat_id', '');
   return { token, chatId };
@@ -23,75 +21,96 @@ function escapeMd(text: string): string {
   return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 }
 
+// Telegram API server IPs (official, from https://core.telegram.org/getting-started/virtual-hosts)
+// We try each one in order, bypassing DNS resolution entirely.
+const TELEGRAM_IPS = [
+  '149.154.167.220',
+  '149.154.166.110',
+  '149.154.175.50',
+];
+
 /**
- * Make an HTTPS POST request using node:https (bypasses Next.js fetch patching
- * that causes "fetch failed" on Hugging Face Spaces).
- *
- * On HF Spaces, api.telegram.org may be slow or partially blocked. We use:
- * - 30s timeout (was 15s — too short for slow connections)
- * - Force IPv4 (HF Spaces may not route IPv6 outbound correctly)
- * - Custom agent with keepAlive disabled
+ * Make an HTTPS POST request to the Telegram API.
+ * Tries multiple Telegram server IPs directly (bypassing DNS) with proper
+ * SNI/Host headers. This is the most reliable way to reach api.telegram.org
+ * from environments where DNS may fail (HF Spaces, some datacenters).
  */
-function telegramPost(url: string, body: any, timeoutMs = 30_000): Promise<{ status: number; text: string }> {
+function telegramPost(path: string, body: any, timeoutMs = 60_000): Promise<{ status: number; text: string }> {
+  const bodyStr = JSON.stringify(body);
+
   return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const bodyStr = JSON.stringify(body);
+    let attempts = 0;
+    let lastError: Error | null = null;
 
-    // Force IPv4 — HF Spaces container may not route IPv6 outbound
-    const agent = new https.Agent({
-      keepAlive: false,
-      family: 4, // IPv4 only
-    });
+    function tryNextIp() {
+      if (attempts >= TELEGRAM_IPS.length) {
+        reject(lastError || new Error('All Telegram IPs failed'));
+        return;
+      }
 
-    const req = https.request(
-      {
-        hostname: urlObj.hostname,
-        port: 443,
-        path: urlObj.pathname + urlObj.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(bodyStr),
+      const ip = TELEGRAM_IPS[attempts];
+      attempts++;
+
+      const agent = new https.Agent({
+        keepAlive: false,
+        family: 4,
+        rejectUnauthorized: true,
+      });
+
+      const req = https.request(
+        {
+          hostname: ip,           // Connect to the IP directly
+          port: 443,
+          path: path,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(bodyStr),
+            'Host': 'api.telegram.org',  // Required for TLS SNI + HTTP virtual hosting
+          },
+          timeout: timeoutMs,
+          agent,
+          servername: 'api.telegram.org', // TLS SNI — critical for certificate validation
         },
-        timeout: timeoutMs,
-        agent,
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }));
-      }
-    );
-    req.on('error', (e) => {
-      if (e.message === 'timeout' || e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET') {
-        reject(new Error('timeout'));
-      } else if (e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN') {
-        reject(new Error('DNS resolution failed for api.telegram.org'));
-      } else if (e.code === 'ECONNREFUSED') {
-        reject(new Error('Connection refused by api.telegram.org'));
-      } else {
-        reject(new Error(`network error: ${e.message} (code: ${e.code || 'unknown'})`));
-      }
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.write(bodyStr);
-    req.end();
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }));
+        }
+      );
+
+      req.on('error', (e) => {
+        console.log(`[telegram] IP ${ip} failed: ${e.code || e.message}`);
+        lastError = e;
+        // Try the next IP
+        tryNextIp();
+      });
+
+      req.on('timeout', () => {
+        console.log(`[telegram] IP ${ip} timed out`);
+        req.destroy(new Error('timeout'));
+        // The error handler will call tryNextIp
+      });
+
+      req.write(bodyStr);
+      req.end();
+    }
+
+    tryNextIp();
   });
 }
 
 /**
- * Try to send a Telegram message with retry. If the first attempt times out
- * (which happens on HF Spaces where api.telegram.org may be slow), retry once
- * before giving up.
+ * Try to send a Telegram message with retry.
+ * If the first attempt times out, retry once with a shorter timeout.
  */
-async function telegramPostWithRetry(url: string, body: any): Promise<{ status: number; text: string }> {
+async function telegramPostWithRetry(path: string, body: any): Promise<{ status: number; text: string }> {
   try {
-    return await telegramPost(url, body, 30_000);
+    return await telegramPost(path, body, 60_000);
   } catch (e: any) {
-    if (e.message === 'timeout') {
-      console.log('[telegram] First attempt timed out, retrying...');
-      // Second attempt with a shorter timeout — if it still fails, the server is truly blocked
-      return await telegramPost(url, body, 15_000);
+    if (e.message === 'timeout' || e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET') {
+      console.log('[telegram] First attempt failed, retrying...');
+      return await telegramPost(path, body, 30_000);
     }
     throw e;
   }
@@ -118,7 +137,6 @@ function formatSignal(signal: ConsensusResult): string {
   lines.push(`*Models:* ${signal.modelsUsed.join(', ')}`);
   lines.push('');
   lines.push(`*Rationale:*`);
-  // Escape rationale for MarkdownV2 — it contains | _ . % [ ] etc. that break Telegram parsing
   lines.push(escapeMd(signal.rationale.slice(0, 800)));
   return lines.join('\n');
 }
@@ -126,7 +144,6 @@ function formatSignal(signal: ConsensusResult): string {
 export async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' | 'HTML' = 'MarkdownV2') {
   const { token, chatId } = await getTelegramConfig();
   if (!token || !chatId) throw new Error('Telegram bot token or chat id not configured');
-  // Sanitize token — strip quotes, whitespace, and non-ASCII chars
   const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
   const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
   if (!safeToken) throw new Error('Telegram bot token is empty after sanitization');
@@ -135,14 +152,14 @@ export async function sendTelegramMessage(text: string, parseMode: 'MarkdownV2' 
   let result: { status: number; text: string };
   try {
     result = await telegramPostWithRetry(
-      `https://api.telegram.org/bot${safeToken}/sendMessage`,
+      `/bot${safeToken}/sendMessage`,
       { chat_id: safeChatId, text, parse_mode: parseMode }
     );
   } catch (err: any) {
-    if (err.message === 'timeout') {
-      throw new Error('Telegram API timed out after retry. api.telegram.org is blocked from this server. Consider deploying on Vercel/Railway where Telegram is reachable, or use a Telegram API proxy.');
+    if (err.message === 'timeout' || err.code === 'ETIMEDOUT') {
+      throw new Error('Telegram API timed out after retry. All Telegram IPs unreachable from this server.');
     }
-    throw new Error(`Cannot reach api.telegram.org — ${err.message}.`);
+    throw new Error(`Cannot reach api.telegram.org — ${err.message || 'network error'}.`);
   }
 
   if (result.status < 200 || result.status >= 300) {
@@ -197,13 +214,12 @@ export async function sendTestMessage(): Promise<boolean> {
     await sendTelegramMessage(text, 'HTML');
   } catch (e: any) {
     if (e.message.includes("can't parse") || e.message.includes('parse')) {
-      // Retry as plain text (no parse_mode)
       const { token, chatId } = await getTelegramConfig();
       const safeToken = token.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
       const safeChatId = chatId.replace(/[^\x20-\x7E]/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
       try {
         const result = await telegramPostWithRetry(
-          `https://api.telegram.org/bot${safeToken}/sendMessage`,
+          `/bot${safeToken}/sendMessage`,
           { chat_id: safeChatId, text }
         );
         if (result.status < 200 || result.status >= 300) {
@@ -218,7 +234,7 @@ export async function sendTestMessage(): Promise<boolean> {
         }
       } catch (err: any) {
         if (err.message === 'timeout') {
-          throw new Error('Telegram API request timed out (15s). api.telegram.org may be blocked from this server.');
+          throw new Error('Telegram API timed out after retry. All Telegram IPs unreachable from this server.');
         }
         throw err;
       }
