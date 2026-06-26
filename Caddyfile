@@ -1,15 +1,32 @@
+# OMNISCIENT gateway config
+#
+# SEC-C1 (fixed): a previous named matcher keyed off the XTransformPort
+# query parameter and forwarded the request to localhost:<that port>. That
+# turned the public :81 listener into an OPEN INTERNAL SSRF PROXY: anyone
+# on the internet could reach Redis (6379), Postgres (5432), the scheduler
+# status server (3042), or any other localhost-bound service by just
+# appending ?XTransformPort=<n> to a request.
+#
+# A full audit of the codebase (grep for "XTransformPort" across src/,
+# mini-services/, and scripts/) confirmed that NO application code uses
+# this query parameter:
+#   - The scheduler mini-service (port 3042) runs its own self-contained
+#     Bun HTTP server and polls the app directly; it is never reached
+#     through this gateway.
+#   - The Next.js app drives its own /api/scheduler/tick in-process via
+#     src/instrumentation.ts (setInterval -> http://localhost:${PORT}/...).
+# So the matcher served no verified purpose and has been removed entirely.
+#
+# Defense in depth: any request that still carries an XTransformPort query
+# parameter is now explicitly rejected with HTTP 403 *before* it can reach
+# any forwarding logic, so the SSRF surface stays closed even if a proxy
+# rule is accidentally reintroduced later.
 :81 {
-	@transform_port_query {
+	@ssrf_attempt {
 		query XTransformPort=*
 	}
-
-	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
+	handle @ssrf_attempt {
+		respond "Forbidden" 403
 	}
 
 	handle {
