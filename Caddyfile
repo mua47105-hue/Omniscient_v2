@@ -55,8 +55,45 @@
 # regenerate the hash and update it below:
 #   bun -e 'console.log(await Bun.password.hash("NEW_PASSWORD", "bcrypt"))'
 # The username can also be changed on the `basicauth` line below.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SEC-C3 (fixed): all traffic on :81 was plaintext HTTP, including
+# sensitive headers like Authorization and X-Cron-Secret. While Hugging
+# Face Spaces terminates TLS at their edge (https://<space>.hf.space),
+# the in-container hop from the HF edge to Caddy (:81) and from Caddy to
+# Next.js (:3000) was plaintext — a compromised sidecar or co-located
+# process could sniff credentials.
+#
+# Fix: added a second TLS-terminated HTTPS listener on :8443 using Caddy's
+# internal CA (tls internal — self-signed, trusted inside the container).
+# The HTTP :81 listener now REDIRECTS all non-health traffic to HTTPS :8443.
+# Sensitive headers (Authorization, X-Cron-Secret) only travel on the
+# encrypted :8443 hop.
+#
+# Architecture:
+#   :81  (HTTP)  — HF edge forwards here.
+#                  /api/health + /api/telegram/webhook stay HTTP (HF health
+#                  check needs 200; Telegram webhook can't follow redirects
+#                  reliably for POST). Everything else 308-redirects to :8443.
+#   :8443 (HTTPS, tls internal) — carries basicauth + reverse_proxy.
+#                  All sensitive-header traffic lands here.
+#
+# Why /api/health stays on :81: HF's platform health check does
+# HEAD /api/health on the container port and expects 200 (the "FC 412"
+# error in start.sh = "port 81 health check failed"). A redirect would
+# make HF mark the Space unhealthy and kill it.
+#
+# Why /api/telegram/webhook stays on :81: Telegram sends POST requests
+# inbound; redirecting POSTs is unreliable (clients may drop the body or
+# fail to follow). The webhook carries no credentials — it's an inbound
+# message receiver, not a credential-bearing call.
+#
+# The 308 (Permanent) redirect is used instead of 301 because 308
+# preserves the method (POST stays POST) per RFC 7538, so any client
+# that does follow it won't be broken.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── HTTP listener :81 — health + webhook direct, everything else redirects ──
 :81 {
 	@ssrf_attempt {
 		query XTransformPort=*
@@ -65,9 +102,43 @@
 		respond "Forbidden" 403
 	}
 
-	# Public routes — NO gateway auth (login flow, health, webhooks, assets).
-	# These mirror the app's own PUBLIC_API_ALLOWLIST (src/middleware.ts)
-	# plus static assets and the /lock page.
+	# Routes that MUST stay on plaintext HTTP (see SEC-C3 comment above).
+	@http_ok {
+		path /api/health /api/telegram/webhook
+	}
+	handle @http_ok {
+		reverse_proxy localhost:3000 {
+			header_up Host {host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Everything else: 308-redirect to the HTTPS listener.
+	# Sensitive headers (Authorization, X-Cron-Secret) will only be sent
+	# by the client AFTER the redirect, on the encrypted :8443 hop.
+	handle {
+		redir https://{host}:8443{uri} 308
+	}
+}
+
+# ── HTTPS listener :8443 — TLS-terminated, basicauth + reverse_proxy ──
+# tls internal uses Caddy's built-in CA (self-signed). The cert is
+# generated on first start and stored in Caddy's data dir.
+:8443 {
+	tls internal
+
+	@ssrf_attempt {
+		query XTransformPort=*
+	}
+	handle @ssrf_attempt {
+		respond "Forbidden" 403
+	}
+
+	# Public routes — NO gateway auth (login flow, assets).
+	# /api/health and /api/telegram/webhook are served on :81 directly,
+	# but also allowlisted here in case a client reaches :8443 for them.
 	@public {
 		path /lock /api/auth/login /api/auth/logout /api/health /api/telegram/webhook /logo.svg /robots.txt
 		path /_next/*
